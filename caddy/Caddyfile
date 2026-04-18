@@ -1,0 +1,3 @@
+api.drykolf.xyz {
+    reverse_proxy /lumi/* localhost:8000
+}
