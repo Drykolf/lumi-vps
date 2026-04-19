@@ -25,35 +25,37 @@ async def on_connect(ws: WebSocket, user_id: str):
     try:
         async for raw in ws.iter_text():
             msg = json.loads(raw)
-            if msg.get("type") == "tool_result":
+            if msg.get("type") in ("tool_result", "tool_error"):
                 fut = _pending.pop(msg["request_id"], None)
                 if fut and not fut.done():
-                    fut.set_result(msg["result"])
+                    result = msg.get("result") or {"error": msg.get("error")}
+                    fut.set_result(result)
     except WebSocketDisconnect:
         _connections.pop(user_id, None)
         logger.info(f"Bridge desconectado: {user_id}")
 
 
 async def call_remote(user_id: str, tool_name: str, args: dict, timeout: int = 30):
-    """
-    Envia un tool call al PC del usuario y espera el resultado.
-    Si el bridge no esta conectado, retorna error sin bloquear.
-    """
     ws = _connections.get(user_id)
     if not ws:
         return {"error": "bridge_not_connected"}
 
     request_id = uuid.uuid4().hex
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     fut = loop.create_future()
     _pending[request_id] = fut
 
-    await ws.send_text(json.dumps({
-        "type": "tool_call",
-        "request_id": request_id,
-        "tool": tool_name,
-        "args": args,
-    }))
+    try:
+        await ws.send_text(json.dumps({
+            "type": "tool_call",
+            "request_id": request_id,
+            "tool": tool_name,
+            "args": args,
+        }))
+    except Exception:
+        _connections.pop(user_id, None)
+        _pending.pop(request_id, None)
+        return {"error": "bridge_not_connected"}
 
     try:
         return await asyncio.wait_for(fut, timeout=timeout)
@@ -61,7 +63,24 @@ async def call_remote(user_id: str, tool_name: str, args: dict, timeout: int = 3
         _pending.pop(request_id, None)
         return {"error": "bridge_timeout"}
 
+async def _heartbeat_loop(interval: int = 60):
+    """Ping a todas las conexiones activas. Limpia las muertas."""
+    while True:
+        await asyncio.sleep(interval)
+        dead = []
+        for user_id, ws in list(_connections.items()):
+            try:
+                await ws.send_text(json.dumps({"type": "ping"}))
+            except Exception:
+                dead.append(user_id)
+                logger.info(f"Bridge heartbeat: conexion muerta detectada — {user_id}")
+        for user_id in dead:
+            _connections.pop(user_id, None)
 
+
+async def start_heartbeat():
+    asyncio.ensure_future(_heartbeat_loop())
+    
 def is_connected(user_id: str) -> bool:
     return user_id in _connections
 

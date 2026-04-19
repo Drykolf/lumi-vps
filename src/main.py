@@ -7,7 +7,7 @@ import logging
 import json
 from dotenv import load_dotenv
 from src.agent.loop import run,run_stream
-from src.bridge.bridge_server import on_connect, connected_users
+from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
 
 load_dotenv()
 
@@ -94,3 +94,17 @@ async def bridge(ws: WebSocket, user_id: str = Query(...), api_key: str = Query(
         await ws.close(code=4001)
         return
     await on_connect(ws, user_id)
+
+@app.on_event("startup")
+async def startup():
+    await start_heartbeat()
+
+@app.get("/v1/tools")
+async def get_tools(x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+    from src.agent import tools
+    return {
+        "local": list(tools._local_tools.keys()),
+        "remote": list(tools._remote_tools.keys()),
+        "bridge_connected": connected_users(),
+    }

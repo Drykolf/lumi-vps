@@ -24,6 +24,48 @@ async def run_stream(user_id: str, message: str, metadata: dict):
         return
 
     messages = build_messages(user_id, message, metadata)
+    schemas = tools.all_schemas()
+
+    # ── Loop tool calls (no streaming hasta tener respuesta final) ────────────
+    for iteration in range(MAX_ITERATIONS):
+        response_msg = await llm.chat(messages, tool_schemas=schemas or None)
+
+        if tools.has_tool_calls(response_msg):
+            raw_calls = response_msg.get("tool_calls") or []
+            tool_calls = [
+                {
+                    "function": {
+                        "name": tc.function.name if hasattr(tc, "function") else tc.get("function", {}).get("name"),
+                        "arguments": tc.function.arguments if hasattr(tc, "function") else tc.get("function", {}).get("arguments", {}),
+                    }
+                }
+                for tc in raw_calls
+            ]
+            tool_results = await tools.execute(tool_calls, user_id)
+            # response_msg es un dict con tool_calls como objetos del SDK
+            messages.append({
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments}
+                    }
+                    for tc in response_msg.get("tool_calls", [])
+                ]
+            })
+
+            for tc, result in zip(response_msg.get("tool_calls", []), tool_results):
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": str(result.get("result", "")),
+                })
+            continue
+
+        # Respuesta final — ahora sí streamear
+        break
 
     full_reply = ""
     async for chunk in llm.chat_stream(messages):
@@ -65,13 +107,24 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
 
         # Tool calls
         if tools.has_tool_calls(response_msg):
-            tool_results = await tools.execute(response_msg["tool_calls"], user_id)
+            logger.info(f"tool_calls detectados: {response_msg.get('tool_calls')}") 
+            raw_calls = response_msg.get("tool_calls") or []
+            tool_calls = [
+                {
+                    "function": {
+                        "name": tc.function.name if hasattr(tc, "function") else tc.get("function", {}).get("name"),
+                        "arguments": tc.function.arguments if hasattr(tc, "function") else tc.get("function", {}).get("arguments", {}),
+                    }
+                }
+                for tc in raw_calls
+            ]
+            tool_results = await tools.execute(tool_calls, user_id)
             messages.append(response_msg)
             messages.append({
                 "role": "tool",
                 "content": str(tool_results)
             })
-            continue  # siguiente iteración con resultados
+            continue
 
         # Escalamiento a modelo especialista
         if "[ESCALAR]" in reply_text:
