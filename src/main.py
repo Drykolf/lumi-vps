@@ -103,8 +103,11 @@ async def startup():
 async def get_tools(x_api_key: str = Header(...)):
     verify_key(x_api_key)
     from src.agent import tools
-    return {
-        "local": list(tools._local_tools.keys()),
-        "remote": list(tools._remote_tools.keys()),
-        "bridge_connected": connected_users(),
-    }
+    connected = connected_users()
+    result = {}
+    for name in tools._local_tools:
+        result[name] = {"location": "vps", "connected": True}
+    for name in tools._remote_tools:
+        if name not in result:  # no duplicar si está en ambos
+            result[name] = {"location": "bridge", "connected": bool(connected)}
+    return {"tools": result, "bridge_connected": connected}

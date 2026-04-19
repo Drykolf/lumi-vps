@@ -4,6 +4,8 @@ Fase 3: tools basicas + infraestructura para bridge.
 """
 import logging
 from src.bridge import bridge_server
+from src.mcp_servers.brave_search.search import search as _brave_search
+import json as _json
 
 logger = logging.getLogger("tools")
 
@@ -22,8 +24,21 @@ def register_remote(name: str, schema: dict):
 
 
 def all_schemas() -> list[dict]:
-    """Lo que ve el LLM — no distingue local de remote."""
-    return list(_remote_tools.values())
+    schemas = {}
+    # Primero locales con schema auto-generado
+    for name, fn in _local_tools.items():
+        schemas[name] = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "description": fn.__doc__ or "",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            }
+        }
+    # Remotas sobreescriben si hay conflicto (schema explícito gana)
+    for name, schema in _remote_tools.items():
+        schemas[name] = schema
+    return list(schemas.values())
 
 
 def has_tool_calls(message: dict) -> bool:
@@ -34,8 +49,9 @@ async def execute(tool_calls: list, user_id: str) -> list[dict]:
     results = []
     for call in tool_calls:
         name = call.get("function", {}).get("name")
-        args = call.get("function", {}).get("arguments", {})
-
+        raw_args = call.get("function", {}).get("arguments", {})
+        args = _json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        logger.info(f"tool={name} args={args}")
         if name in _local_tools:
             try:
                 result = await _local_tools[name](**args)
@@ -54,20 +70,29 @@ async def execute(tool_calls: list, user_id: str) -> list[dict]:
 
 # ── Tools locales VPS ─────────────────────────────────────────────────────────
 
-from datetime import datetime, timezone, timedelta
+async def _web_search(query: str) -> dict:
+    """Busca información actual en la web. Usar cuando el usuario pregunta por noticias, precios, eventos recientes o cualquier dato que pueda haber cambiado."""
+    results = await _brave_search(query)
+    return {"results": results}
 
-COL = timezone(timedelta(hours=-5))
-
-async def _get_current_time() -> dict:
-    now = datetime.now(COL)
-    return {
-        "datetime": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "timezone": "COT (UTC-5)",
-        "weekday": now.strftime("%A"),
+#register_local("web_search", _web_search)
+_local_tools["web_search"] = _web_search
+_remote_tools["web_search"] = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Busca información actual en la web. Usar cuando el usuario pregunta por noticias, precios, eventos recientes o cualquier dato que pueda haber cambiado.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "El término o pregunta a buscar en la web."}
+            },
+            "required": ["query"]
+        }
     }
-
+}
 # ── Registro de tools ────────────────────────────────────────────────────────
-register_local("get_current_time", _get_current_time)
+
 register_remote("get_clipboard", {
     "type": "function",
     "function": {
