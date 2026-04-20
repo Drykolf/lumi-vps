@@ -8,6 +8,7 @@ import json
 from dotenv import load_dotenv
 from src.agent.loop import run,run_stream
 from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
+from src.agent.memory import set_profile, get_profile
 
 load_dotenv()
 
@@ -41,6 +42,10 @@ class ObserveRequest(BaseModel):
     content: str
     session_id: str = "default"
 
+class UserProfileRequest(BaseModel):
+    display_name: str
+    description: str = ""
+    metadata: dict = {}
 
 # ── Health ────────────────────────────────────────────────────────────────────
 
@@ -111,3 +116,18 @@ async def get_tools(x_api_key: str = Header(...)):
         if name not in result:  # no duplicar si está en ambos
             result[name] = {"location": "bridge", "connected": bool(connected)}
     return {"tools": result, "bridge_connected": connected}
+
+# ── User Profiles ─────────────────────────────────────────────────────────────
+@app.post("/v1/users/{user_id}")
+async def upsert_user(user_id: str, req: UserProfileRequest, x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+    profile = set_profile(user_id, req.display_name, req.description, req.metadata)
+    return profile
+
+@app.get("/v1/users/{user_id}")
+async def get_user(user_id: str, x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+    profile = get_profile(user_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return profile

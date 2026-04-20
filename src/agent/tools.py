@@ -4,7 +4,8 @@ Fase 3: tools basicas + infraestructura para bridge.
 """
 import logging
 from src.bridge import bridge_server
-from src.mcp_servers.brave_search.search import search as _brave_search
+from src.tools.brave_search import BraveSearchTool
+from src.tools.base import BaseTool
 import json as _json
 
 logger = logging.getLogger("tools")
@@ -15,8 +16,10 @@ _local_tools: dict[str, callable] = {}
 _remote_tools: dict[str, dict] = {}  # name -> schema
 
 
-def register_local(name: str, fn: callable):
-    _local_tools[name] = fn
+def register_tool(tool: BaseTool):
+    """Registra una instancia de BaseTool en el registry."""
+    _local_tools[tool.name] = tool.run
+    _remote_tools[tool.name] = tool.schema()
 
 
 def register_remote(name: str, schema: dict):
@@ -69,28 +72,7 @@ async def execute(tool_calls: list, user_id: str) -> list[dict]:
 
 
 # ── Tools locales VPS ─────────────────────────────────────────────────────────
-
-async def _web_search(query: str) -> dict:
-    """Busca información actual en la web. Usar cuando el usuario pregunta por noticias, precios, eventos recientes o cualquier dato que pueda haber cambiado."""
-    results = await _brave_search(query)
-    return {"results": results}
-
-#register_local("web_search", _web_search)
-_local_tools["web_search"] = _web_search
-_remote_tools["web_search"] = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "Busca información actual en la web. Usar cuando el usuario pregunta por noticias, precios, eventos recientes o cualquier dato que pueda haber cambiado.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "El término o pregunta a buscar en la web."}
-            },
-            "required": ["query"]
-        }
-    }
-}
+register_tool(BraveSearchTool())
 # ── Registro de tools ────────────────────────────────────────────────────────
 
 register_remote("get_clipboard", {

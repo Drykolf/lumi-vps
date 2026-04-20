@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.agent.memory import get_history, search_relevant
+from src.agent.memory import get_history, search_relevant, get_profile
 from src.state.internal_state import get_state, state_to_text
 COL = timezone(timedelta(hours=-5))
 CARD_PATH = Path(__file__).parent.parent / "personality" / "lumi_card.json"
@@ -60,7 +60,11 @@ def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
 
     if relevant_memories:
         parts.append("[Memorias relevantes]\n" + "\n".join("- " + m for m in relevant_memories))
-
+    profile = get_profile(user_id)
+    if profile:
+        parts.append(f"[Usuario] {profile['display_name']} — {profile['description']}")
+    else:
+        parts.append(f"[Usuario] {user_id}")
     channel = metadata.get("channel", "desktop")
     session_id = metadata.get("session_id", "unknown")
     parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now)
