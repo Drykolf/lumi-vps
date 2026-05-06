@@ -1,0 +1,113 @@
+-- LUMI core_state.db
+-- Lives on the VPS alongside the conversation history database.
+-- This is the SOURCE OF TRUTH for:
+--   * Person registry and interest_score
+--   * Relations between third parties
+--   * Lumi's internal dynamic state
+--   * Pending skill proposals (skill_evolution)
+--
+-- Mem0 (pgvector) stores the SEMANTIC MEMORIES about each person,
+-- linked to this DB via metadata.person_id.
+-- Conversation history stays in its own SQLite (history.db) — separate concern.
+
+PRAGMA foreign_keys = ON;
+
+-- ============================================================
+-- PERSONS — registry of every named entity Lumi knows about
+-- ============================================================
+CREATE TABLE IF NOT EXISTS persons (
+    person_id        TEXT PRIMARY KEY,                    -- e.g. "jose", "gloria1", "carlos_jefe"
+    canonical_name   TEXT NOT NULL,                       -- "Gloria"
+    aliases          TEXT,                                -- JSON array, e.g. '["mami","mamá","madre"]'
+    is_jose          INTEGER NOT NULL DEFAULT 0,          -- 1 only for the row where person_id="jose"
+    interest_score   REAL    NOT NULL DEFAULT 0.10,
+    emotional_tone   TEXT    NOT NULL DEFAULT 'neutral',  -- positive | neutral | negative | complex
+    status           TEXT    NOT NULL DEFAULT 'active',   -- active | decaying | forgotten | disliked
+    first_seen       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_mentioned   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    mention_count    INTEGER NOT NULL DEFAULT 1,
+    session_delta    REAL    NOT NULL DEFAULT 0.0,        -- accumulated delta this session, reset on close
+    notes            TEXT,                                -- one-line factual note (e.g. reason for dislike)
+    CHECK (interest_score BETWEEN -1.0 AND 1.0),
+    CHECK (emotional_tone IN ('positive','neutral','negative','complex')),
+    CHECK (status IN ('active','decaying','forgotten','disliked')),
+    -- Hard rule: only Jose may exceed 0.69
+    CHECK (is_jose = 1 OR interest_score <= 0.69)
+);
+
+CREATE INDEX IF NOT EXISTS idx_persons_score          ON persons(interest_score DESC);
+CREATE INDEX IF NOT EXISTS idx_persons_last_mentioned ON persons(last_mentioned);
+CREATE INDEX IF NOT EXISTS idx_persons_status         ON persons(status);
+
+-- Seed Jose
+INSERT OR IGNORE INTO persons (person_id, canonical_name, is_jose, interest_score, status)
+VALUES ('jose', 'Jose', 1, 0.70, 'active');
+
+-- ============================================================
+-- RELATIONS — directed connections between THIRD PARTIES
+-- ============================================================
+-- IMPORTANT: relations are NEVER stored between Lumi and a person.
+-- Lumi's stance toward a person is fully captured by:
+--   persons.interest_score  + persons.emotional_tone  + Mem0 memories.
+-- This table models Jose's social graph from Lumi's perspective.
+CREATE TABLE IF NOT EXISTS relations (
+    relation_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_person_id   TEXT    NOT NULL,
+    to_person_id     TEXT    NOT NULL,
+    relation_type    TEXT    NOT NULL,    -- family | romantic | friendship | professional | conflict | unknown
+    description      TEXT    NOT NULL,    -- Spanish, e.g. "Gloria es la madre de Jose"
+    inferred         INTEGER NOT NULL DEFAULT 0,  -- 1 if Lumi inferred (only direct family per relation_policy.md)
+    first_mentioned  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_mentioned   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    mention_count    INTEGER NOT NULL DEFAULT 1,
+    CHECK (relation_type IN ('family','romantic','friendship','professional','conflict','unknown')),
+    CHECK (from_person_id != to_person_id),
+    CHECK (from_person_id != 'lumi' AND to_person_id != 'lumi'),  -- enforce: no Lumi relations
+    UNIQUE (from_person_id, to_person_id, relation_type),
+    FOREIGN KEY (from_person_id) REFERENCES persons(person_id) ON DELETE CASCADE,
+    FOREIGN KEY (to_person_id)   REFERENCES persons(person_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_person_id);
+CREATE INDEX IF NOT EXISTS idx_relations_to   ON relations(to_person_id);
+
+-- ============================================================
+-- LUMI_STATE — Lumi's own dynamic internal state
+-- ============================================================
+-- Single-row key/value to keep the schema flexible.
+-- Canonical key: 'internal_state' → JSON blob defined in mood_policy.md
+-- Other keys reserved for future use (e.g. 'last_introspection').
+CREATE TABLE IF NOT EXISTS lumi_state (
+    key           TEXT PRIMARY KEY,
+    value         TEXT NOT NULL,                          -- JSON serialized
+    last_updated  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seed the internal state row with defaults (overridden by mood_policy on first run)
+INSERT OR IGNORE INTO lumi_state (key, value) VALUES (
+  'internal_state',
+  '{"mood_valence":0.3,"mood_energy":0.6,"irritation":0.1,"focus_level":0.7,"trust_jose":0.9,"emotional_honesty_mode":false}'
+);
+
+-- ============================================================
+-- SKILL_PROPOSALS — auto-learning candidates awaiting review
+-- ============================================================
+-- See skill_evolution.md. Lumi never auto-loads a skill from this table.
+-- Jose reviews drafts manually; on approval the file is moved out of _drafts/.
+CREATE TABLE IF NOT EXISTS skill_proposals (
+    proposal_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposed_name   TEXT    NOT NULL,                    -- snake_case skill name
+    pattern_count   INTEGER NOT NULL,                    -- occurrences observed
+    pattern_window_days INTEGER NOT NULL,                -- detection window
+    sample_queries  TEXT    NOT NULL,                    -- JSON array of triggering messages (max 5)
+    rationale       TEXT    NOT NULL,                    -- Lumi's one-paragraph reasoning, in Spanish
+    draft_path      TEXT    NOT NULL,                    -- e.g. "src/skills/_drafts/research_v2.md"
+    parent_skill    TEXT,                                -- if this is an edit to existing skill
+    status          TEXT    NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | superseded
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reviewed_at     DATETIME,
+    review_notes    TEXT,                                -- Jose's notes on rejection or edits
+    CHECK (status IN ('pending','approved','rejected','superseded'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_proposals_status ON skill_proposals(status);

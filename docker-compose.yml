@@ -41,6 +41,8 @@ services:
       timeout: 10s
       retries: 20
       start_period: 90s
+    profiles:
+      - graph
 
   mem0:
     build:
@@ -50,8 +52,6 @@ services:
     restart: unless-stopped
     depends_on:
       postgres:
-        condition: service_healthy
-      neo4j:
         condition: service_healthy
     ports:
       - "127.0.0.1:8100:8000"
@@ -69,6 +69,7 @@ services:
       - OPENAI_API_KEY=${DEEPINFRA_API_KEY}
       - OPENAI_BASE_URL=https://api.deepinfra.com/v1/openai
       - ADMIN_API_KEY=${MEM0_ADMIN_API_KEY}
+      - MEM0_LLM_MODEL=${MEM0_LLM_MODEL}
     volumes:
       - ./mem0_history:/app/history
     logging:

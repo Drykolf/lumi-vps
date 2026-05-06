@@ -51,18 +51,19 @@ def get_cached_prefix() -> str:
     return _cached_prefix
 
 
-def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
+async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
     state = get_state(user_id)
-    relevant_memories = search_relevant(user_id, message)
+    relevant_memories = await search_relevant(user_id, message)
     now = datetime.now(COL).strftime("%d/%m/%Y %H:%M COT")
 
     parts = ["[Estado interno] " + state_to_text(state)]
 
     if relevant_memories:
         parts.append("[Memorias relevantes]\n" + "\n".join("- " + m for m in relevant_memories))
-    profile = get_profile(user_id)
+    profile = await get_profile(user_id)
     if profile:
-        parts.append(f"[Usuario] {profile['display_name']} — {profile['description']}")
+        memories_text = "\n".join("- " + m for m in profile.get("memories", []))
+        parts.append(f"[Usuario] {user_id}\n{memories_text}")
     else:
         parts.append(f"[Usuario] {user_id}")
     channel = metadata.get("channel", "desktop")
@@ -72,9 +73,9 @@ def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
     return "\n\n".join(parts)
 
 
-def build_messages(user_id: str, message: str, metadata: dict) -> list[dict]:
+async def build_messages(user_id: str, message: str, metadata: dict) -> list[dict]:
     cached = get_cached_prefix()
-    dynamic = _build_dynamic_suffix(user_id, message, metadata)
+    dynamic = await _build_dynamic_suffix(user_id, message, metadata)
     system_prompt = cached + "\n\n---\n\n" + dynamic
 
     history = get_history(user_id, limit=10)

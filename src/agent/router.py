@@ -30,6 +30,10 @@ _WEB_SEARCH_BLOCKLIST = [
     r"\b(gracias|ok|listo|entendido|perfecto)\b",
 ]
 
+_EXPLICIT_SAVE_TRIGGERS = [
+    r"\b(guarda|anota|recuerda|apunta|memoriza)\b",
+    r"\b(guarda esto|anota esto|quiero que recuerdes)\b",
+]
 
 def _matches(text: str, patterns: list[str]) -> bool:
     text_lower = text.lower()

@@ -4,7 +4,7 @@ Ciclo: clasificar → contexto → LLM → tools → memoria → retornar.
 """
 from src.agent import router, tools, llm
 from src.agent.context import build_messages
-from src.agent.memory import save_turn, init_db
+from src.agent.memory import save_turn, init_db, add_memory_explicit
 from src.state.internal_state import init_state_table
 
 MAX_ITERATIONS = 10
@@ -23,7 +23,16 @@ async def run_stream(user_id: str, message: str, metadata: dict):
         yield reply
         return
 
-    messages = build_messages(user_id, message, metadata)
+    if task_type == "explicit_save":
+        category = router.detect_category(message)
+        await add_memory_explicit(message, user_id, category)
+        save_turn(user_id, "user", message)
+        reply = "[neutral] Listo, lo guardé."
+        save_turn(user_id, "assistant", reply)
+        yield reply
+        return
+
+    messages = await build_messages(user_id, message, metadata)
     schemas = tools.all_schemas()
 
     # ── Loop tool calls (no streaming hasta tener respuesta final) ────────────
@@ -74,6 +83,7 @@ async def run_stream(user_id: str, message: str, metadata: dict):
 
     save_turn(user_id, "user", message)
     save_turn(user_id, "assistant", full_reply)
+    
 async def run(user_id: str, message: str, metadata: dict) -> str:
     """
     Punto de entrada del agente.
@@ -95,8 +105,16 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
         # Fase 4: Brave Search se inyecta en el contexto aquí
         metadata["web_search_needed"] = True
 
+    if task_type == "explicit_save":
+        category = router.detect_category(message)
+        await add_memory_explicit(message, user_id, category)
+        save_turn(user_id, "user", message)
+        reply = "[neutral] Listo, lo guardé."
+        save_turn(user_id, "assistant", reply)
+        return reply
+        
     # ── 2. Construir contexto ────────────────────────────────────────────────
-    messages = build_messages(user_id, message, metadata)
+    messages = await build_messages(user_id, message, metadata)
 
     # ── 3. Loop LLM + tools ──────────────────────────────────────────────────
     reply_text = ""

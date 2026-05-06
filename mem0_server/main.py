@@ -43,6 +43,7 @@ POSTGRES_COLLECTION_NAME = os.environ.get("POSTGRES_COLLECTION_NAME", "memories"
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4.1-nano-2025-04-14")
+MEM0_LLM_MODEL = os.environ.get("MEM0_LLM_MODEL", LLM_MODEL)
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_DIMS = int(os.environ.get("EMBEDDING_DIMS", "1536"))
 HISTORY_DB_PATH = os.environ.get("HISTORY_DB_PATH", "/app/history/history.db")
@@ -65,7 +66,7 @@ DEFAULT_CONFIG = {
         "api_key": OPENAI_API_KEY,
         "openai_base_url": OPENAI_BASE_URL,
         "temperature": 0.2,
-        "model": LLM_MODEL,
+        "model": MEM0_LLM_MODEL,
     }},
     "embedder": {"provider": "openai", "config": {
         "api_key": OPENAI_API_KEY,
@@ -74,7 +75,15 @@ DEFAULT_CONFIG = {
         "embedding_dims": EMBEDDING_DIMS,
     }},
     "history_db_path": HISTORY_DB_PATH,
-}
+    "custom_instructions": """Extract memories following these rules:
+        - One fact per memory item, never combine multiple facts
+        - Write in Spanish, third person, concise and factual
+        - Ignore shopping lists, casual greetings, temporary states like 'estoy cansado hoy'
+        - Extract: personal traits, relationships with named people, technical setup, future events with emotional weight, work and life context
+        - For relationships: capture the person's name, their role, and connection to the user
+        - Temporary plans without emotional significance should be ignored
+        - Only extract facts explicitly stated in the conversation. Never infer or assume facts not mentioned.""",
+    }
 
 
 MEMORY_INSTANCE = Memory.from_config(DEFAULT_CONFIG)

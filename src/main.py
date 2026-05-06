@@ -1,9 +1,10 @@
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Query, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Literal
 import os
 import logging
+import httpx
 import json
 from dotenv import load_dotenv
 from src.agent.loop import run,run_stream
@@ -118,16 +119,13 @@ async def get_tools(x_api_key: str = Header(...)):
     return {"tools": result, "bridge_connected": connected}
 
 # ── User Profiles ─────────────────────────────────────────────────────────────
-@app.post("/v1/users/{user_id}")
-async def upsert_user(user_id: str, req: UserProfileRequest, x_api_key: str = Header(...)):
-    verify_key(x_api_key)
-    profile = set_profile(user_id, req.display_name, req.description, req.metadata)
-    return profile
-
-@app.get("/v1/users/{user_id}")
-async def get_user(user_id: str, x_api_key: str = Header(...)):
-    verify_key(x_api_key)
-    profile = get_profile(user_id)
-    if not profile:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
-    return profile
+@app.get("/v1/memories/{user_id}")
+async def get_memories(user_id: str, x_api_key: str = Header(None)):
+    if x_api_key != os.getenv("LUMI_API_KEY"):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"http://localhost:8100/memories?user_id={user_id}",
+            headers={"X-API-Key": os.getenv("MEM0_ADMIN_API_KEY")}
+        )
+        return resp.json()
