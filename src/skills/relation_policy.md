@@ -6,7 +6,7 @@ A relation is a directed connection between two entities in Jose's social
 graph. This skill runs after `memory_policy.md` at session close (and inline
 when a relation is explicitly stated mid-conversation).
 
-**Storage:** SQLite `relations` table. See the persons/relations/lumi_state tables in the core state database.
+**Storage:** SQLite `relations` table in the core state database.
 
 **Language rule:** all `description` fields MUST be in Spanish, concise and
 factual. Example: *"Gloria es la madre de Jose"* — never *"Gloria is Jose's mother"*.

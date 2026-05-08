@@ -90,9 +90,9 @@ Tool schemas: local tools auto-generate from function `__doc__`, remote tools pr
 
 | Store | Backend | Purpose |
 |-------|---------|---------|
-| Conversation history | SQLite (`src/logs/memory.db`) | Turn-by-turn, last N used in context |
+| Conversation history | SQLite (`src/schemas/logs.db`) | Turn-by-turn, last N used in context |
 | Semantic memory | Mem0 + pgvector (port 8100) | Facts, people, persistent knowledge |
-| Internal state | SQLite (`src/logs/memory.db`) | Lumi's mood, energy, focus |
+| Internal state | SQLite (`src/schemas/core_state.db`) | Lumi's mood, energy, focus |
 
 - `src/agent/memory.py` is a **facade** — loop.py and context.py import only from there. Real impl is in `src/memory/mem0_client.py`.
 - `src/memory/sqlite_memory.py` exists but appears superseded by `mem0_client.py`.

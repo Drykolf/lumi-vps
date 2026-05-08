@@ -10,7 +10,7 @@ This is the implementation of "Lumi grows organically" — aligned with Lumi's d
 edge") and with the modular skill architecture.
 
 **Storage:**
-- `skill_proposals` table in SQLite (See the persons/relations/lumi_state tables in the core state database.).
+- `skill_proposals` table in SQLite (see `core_state.db`).
 - Draft files in `src/skills/_drafts/`.
 - Approved skills move to `src/skills/` by Jose's manual action (or a
   dedicated `approve_skill` CLI command).

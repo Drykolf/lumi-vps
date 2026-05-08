@@ -8,7 +8,7 @@ upgrades, mood adjustments, and proactive curiosity.
 
 This skill runs after each turn (apply deltas) and at session close (run decay).
 
-**Storage:** the score and all metadata live in SQLite `persons` table — See the persons/relations/lumi_state tables in the core state database. Mem0 is NOT the source of truth for the score.
+**Storage:** the score and all metadata live in SQLite `persons` table. Mem0 is NOT the source of truth for the score.
 
 ---
 

@@ -106,7 +106,7 @@ For each person flagged in Stage 3:
 
 Per `interest_policy.md`:
 
-The infrastructure layer runs a decay pass on all persons where is_jose=0 and interest_score >= 0 and last_mentioned is 28+ days ago."
+The infrastructure layer runs a decay pass on all persons where is_jose=0 and interest_score >= 0 and last_mentioned is 28+ days ago.
 
 For any rows that flipped to `status='forgotten'` this pass, schedule a
 cleanup of their Mem0 facts (delete in Stage 5 logic, executed here).

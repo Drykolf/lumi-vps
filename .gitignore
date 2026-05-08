@@ -1,3 +1,4 @@
 .env
 src/logs/
 mem0_history/
+src/schemas/

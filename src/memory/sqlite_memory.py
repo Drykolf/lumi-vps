@@ -1,9 +1,11 @@
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "logs" / "memory.db"
+COL = timezone(timedelta(hours=-5))
+
+DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
 
 
 def init_db():
@@ -26,7 +28,7 @@ def save_turn(user_id: str, role: str, content: str):
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         "INSERT INTO history (user_id, role, content, ts) VALUES (?, ?, ?, ?)",
-        (user_id, role, content, datetime.utcnow().isoformat())
+        (user_id, role, content, datetime.now(COL).isoformat())
     )
     conn.commit()
     conn.close()

@@ -6,7 +6,6 @@ trust — how it evolves, and how it surfaces in her register without ever
 being recited as numbers. This is Lumi's dynamic emotional layer.
 
 **Storage:** SQLite `lumi_state` table, key `internal_state`, value is JSON.
-See the persons/relations/lumi_state tables in the core state database.
 
 **This skill does NOT modify memory or scores.** It only updates Lumi's
 internal state. Memory upgrades and decay are owned by other skills.
@@ -82,8 +81,6 @@ heartbeat is configured yet), `mood_policy.md` runs a regression pass:
 
 Each morning, all state values regress partially toward their baseline: irritation fades fastest (60% toward 0.0), energy recovers well (50% toward 0.6), valence moves moderately (40% toward 0.3), focus moves moderately (40% toward 0.7). Trust toward Jose does not regress.
 
-Each value moves 40–60% of the way toward its baseline — irritation fades fastest at 60%, energy recovers at 50%, valence and focus at 40%. Trust toward Jose does not regress.
-
 **Why these constants.** Irritation fades faster than valence — Lumi sleeps
 on it. Energy resets the most aggressively because it tracks something
 physically analogous (rest). Trust never regresses because it represents an
@@ -128,8 +125,28 @@ Jose specifically asks how she is.
 **Hard rule:** numbers never leave this skill. They translate to natural
 language in the prompt's dynamic block. Translate using this mapping:
 
+| mood_valence | Descriptor |
+|---|---|
+| < 0.0 | `algo seria` |
+| 0.0 – 0.29 | `neutra` |
+| 0.3 – 0.69 | `de buen humor` |
+| >= 0.7 | `muy animada` |
 
-This single line is injected into the dynamic block of the prompt. The LLM
+| mood_energy | Descriptor |
+|---|---|
+| < 0.3 | `cansada` |
+| 0.3 – 0.59 | `normal` |
+| >= 0.6 | `con energía` |
+
+| irritation | Descriptor |
+|---|---|
+| < 0.3 | (sin descriptor) |
+| 0.3 – 0.59 | `, con algo de fastidio acumulado` |
+| >= 0.6 | `, bastante fastidiada` |
+
+These compose into the single line: *"Estado interno actual de Lumi: {valence_desc}, {energy_desc}{irrit_desc}."*
+
+This line is injected into the dynamic block of the prompt. The LLM
 uses it to color the response — shorter sentences when irritated, warmer
 when valence is high — without ever reciting it.
 

@@ -2,7 +2,7 @@
 
 ## Purpose
 Defines what semantic data Lumi stores in **Mem0** about each person, based on
-their `interest_score` (See the persons/relations/lumi_state tables in the core state database.).
+their `interest_score` (stored in the `persons` table in SQLite `core_state.db`).
 This skill is used ONLY when **saving** memories — not when searching or
 loading context. For the read path see `memory_search.md`.
 

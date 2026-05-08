@@ -51,6 +51,8 @@ class Qwen3_5_35B(BaseLLM):
             **self._kwargs(messages, tool_schemas, 512, thinking, stream=True)
         )
         async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                yield delta.content

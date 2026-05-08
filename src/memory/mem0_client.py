@@ -16,10 +16,17 @@ import logging
 import sqlite3
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 
+COL = timezone(timedelta(hours=-5))
+
 logger = logging.getLogger("mem0_client")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_h)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MEM0_URL = os.getenv("MEM0_URL", "http://localhost:8100")
@@ -28,7 +35,7 @@ TIMEOUT = 10
 
 # ── SQLite — historial de conversación (se mantiene en SQLite) ────────────────
 # El historial turno-a-turno NO va a Mem0 — es acceso secuencial, no semántico.
-DB_PATH = Path(__file__).parent.parent / "logs" / "memory.db"
+DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
 
 
 def _conn():
@@ -56,7 +63,7 @@ def save_turn(user_id: str, role: str, content: str):
     conn = _conn()
     conn.execute(
         "INSERT INTO history (user_id, role, content, ts) VALUES (?, ?, ?, ?)",
-        (user_id, role, content, datetime.utcnow().isoformat())
+        (user_id, role, content, datetime.now(COL).isoformat())
     )
     conn.commit()
     conn.close()
@@ -143,7 +150,8 @@ async def set_profile(user_id: str, display_name: str, description: str = "", me
 async def save_explicit(content: str, user_id: str, category: str = "note") -> dict:
     """
     Guarda contenido verbatim sin pasar por el extractor LLM.
-    Para recetas, links, notas, código, referencias explícitas.
+    Para recetas, links, notas, codigo, referencias explicitas.
+    Retorna dict con success + memory text para verificacion por el caller.
     """
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -153,12 +161,15 @@ async def save_explicit(content: str, user_id: str, category: str = "note") -> d
                 json={
                     "messages": [{"role": "user", "content": content}],
                     "user_id": user_id,
-                    "infer": False,  # ← desactiva el extractor
+                    "infer": False,  # desactiva el extractor
                     "metadata": {"category": category}
                 },
             )
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            results = data.get("results", [])
+            memory_text = results[0].get("memory", content) if results else content
+            return {"success": True, "memory": memory_text, "category": category}
     except Exception as e:
         logger.warning(f"mem0 save_explicit failed: {e}")
-        return {}
+        return {"success": False, "error": str(e)}
