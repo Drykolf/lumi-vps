@@ -69,7 +69,7 @@ def get_history(user_id: str, limit: int = 10) -> list[dict]:
     """Retorna los ultimos N turnos de conversacion desde SQLite."""
     conn = _conn()
     rows = conn.execute(
-        "SELECT role, content FROM history WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+        "SELECT role, content FROM history WHERE user_id = ? AND summarized = 0 ORDER BY id DESC LIMIT ?",
         (user_id, limit)
     ).fetchall()
     conn.close()

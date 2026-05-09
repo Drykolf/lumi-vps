@@ -58,7 +58,7 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
 
     parts = ["[Estado interno] " + state_to_text(state)]
 
-    summaries = get_recent_summaries(user_id, limit=3)
+    summaries = get_recent_summaries(user_id, limit=5)
     if summaries:
         parts.append("[Resumenes de sesiones anteriores]\n" + "\n".join("- " + s for s in summaries))
 
@@ -83,8 +83,6 @@ async def build_messages(user_id: str, message: str, metadata: dict) -> list[dic
     system_prompt = cached + "\n\n---\n\n" + dynamic
 
     history = get_history(user_id, limit=5)
-    # TODO: trim_history_after — mark summarized turns for context exclusion, keep only unsummarized in active window
-
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     messages.append({"role": "user", "content": message})

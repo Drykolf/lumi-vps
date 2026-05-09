@@ -67,11 +67,8 @@ def get_session_users(session_id: str) -> list[str]:
 
 
 def reset_turns(session_id: str):
-    """Resets turn_count to 0 after a summary is generated."""
+    """Deletes the session row after a summary so the next interaction starts fresh."""
     conn = _conn()
-    conn.execute(
-        "UPDATE session_turns SET turn_count = 0 WHERE session_id = ?",
-        (session_id,)
-    )
+    conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()

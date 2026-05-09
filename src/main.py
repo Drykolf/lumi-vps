@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from src.agent.loop import run,run_stream
 from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
 from src.agent.memory import set_profile, get_profile
+import src.scheduler.heartbeat as scheduler
 
 load_dotenv()
 
@@ -109,6 +110,7 @@ async def bridge(ws: WebSocket, user_id: str = Query(...), api_key: str = Query(
 @app.on_event("startup")
 async def startup():
     await start_heartbeat()
+    scheduler.start()
 
 @app.get("/v1/tools")
 async def get_tools(x_api_key: str = Header(...)):
