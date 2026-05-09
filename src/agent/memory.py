@@ -1,12 +1,22 @@
 """
-Interfaz pública de memoria — Fase 4+.
-loop.py y context.py solo importan este módulo.
-Implementaciones en src/memory/mem0_client.py y src/memory/core_state.py
+Interfaz publica de memoria — Fase 4+.
+loop.py y context.py solo importan este modulo.
+
+Implementaciones:
+  src/memory/sqlite_memory.py    — historial, sesiones, resumenes (SQLite)
+  src/memory/mem0_client.py      — Mem0 semantico
+  src/memory/core_state.py       — personas, relaciones, lumi_state
+  src/memory/session_tracker.py  — contador de turnos por sesion
+  src/memory/summary.py          — generacion LLM de resumenes de sesion
 """
-from src.memory.mem0_client import (
+from src.memory.sqlite_memory import (
     init_db,
     save_turn,
     get_history,
+    get_session_turns,
+    mark_summarized,
+)
+from src.memory.mem0_client import (
     search_relevant,
     add_memory,
     get_profile,
@@ -28,12 +38,16 @@ from src.memory.core_state import (
     add_relation,
     infer_family_relations,
 )
+from src.memory.session_tracker import record_turn, get_session_users, reset_turns
+from src.memory.summary import generate_summary, get_recent_summaries
 
 __all__ = [
     "init_db",
     "init_core_db",
     "save_turn",
     "get_history",
+    "get_session_turns",
+    "mark_summarized",
     "search_relevant",
     "add_memory",
     "get_profile",
@@ -49,4 +63,8 @@ __all__ = [
     "get_relations",
     "add_relation",
     "infer_family_relations",
+    "record_turn",
+    "get_session_users",
+    "generate_summary",
+    "get_recent_summaries",
 ]

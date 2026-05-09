@@ -1,44 +1,100 @@
+"""
+SQLite operations — conversation history, session tracking, summaries.
+Stored in schemas/logs.db.
+"""
 import sqlite3
 import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 COL = timezone(timedelta(hours=-5))
-
 DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
 
 
-def init_db():
+def _conn():
     DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    return sqlite3.connect(DB_PATH)
+
+
+def init_db():
+    """Create all SQLite tables for conversation and session tracking."""
+    conn = _conn()
+    conn.execute("DROP TABLE IF EXISTS history")
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS history (
+        CREATE TABLE history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
+            session_id TEXT NOT NULL DEFAULT 'default',
+            summarized INTEGER NOT NULL DEFAULT 0,
             ts TEXT NOT NULL
         )
     """)
-    conn.commit()
-    conn.close()
-
-
-def save_turn(user_id: str, role: str, content: str):
-    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS session_turns (
+            session_id   TEXT PRIMARY KEY,
+            user_ids     TEXT NOT NULL DEFAULT '[]',
+            turn_count   INTEGER NOT NULL DEFAULT 0,
+            last_turn_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS session_summaries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_ids   TEXT NOT NULL,
+            summary    TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+    """)
     conn.execute(
-        "INSERT INTO history (user_id, role, content, ts) VALUES (?, ?, ?, ?)",
-        (user_id, role, content, datetime.now(COL).isoformat())
+        "CREATE INDEX IF NOT EXISTS idx_summaries_user ON session_summaries(user_ids)"
     )
     conn.commit()
     conn.close()
 
 
-def get_history(user_id: str, limit: int = 20) -> list[dict]:
-    conn = sqlite3.connect(DB_PATH)
+def save_turn(user_id: str, role: str, content: str, session_id: str = "default"):
+    """Guarda un turno de conversacion en SQLite."""
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO history (user_id, role, content, session_id, ts) VALUES (?, ?, ?, ?, ?)",
+        (user_id, role, content, session_id, datetime.now(COL).isoformat())
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_history(user_id: str, limit: int = 10) -> list[dict]:
+    """Retorna los ultimos N turnos de conversacion desde SQLite."""
+    conn = _conn()
     rows = conn.execute(
         "SELECT role, content FROM history WHERE user_id = ? ORDER BY id DESC LIMIT ?",
         (user_id, limit)
     ).fetchall()
     conn.close()
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
+
+
+def get_session_turns(session_id: str) -> list[dict]:
+    """Retorna los turnos no resumidos de una sesion, en orden cronologico."""
+    conn = _conn()
+    rows = conn.execute(
+        """SELECT role, content FROM history
+           WHERE session_id = ? AND summarized = 0
+           ORDER BY id ASC""",
+        (session_id,)
+    ).fetchall()
+    conn.close()
+    return [{"role": r[0], "content": r[1]} for r in rows]
+
+
+def mark_summarized(session_id: str):
+    """Marca como resumidos todos los turnos no resumidos de una sesion."""
+    conn = _conn()
+    conn.execute(
+        "UPDATE history SET summarized = 1 WHERE session_id = ? AND summarized = 0",
+        (session_id,)
+    )
+    conn.commit()
+    conn.close()

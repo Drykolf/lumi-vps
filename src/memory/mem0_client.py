@@ -1,25 +1,12 @@
 """
 Cliente de memoria — Fase 4: Mem0 + pgvector.
-Reemplaza sqlite_memory.py manteniendo interfaz pública idéntica.
+Operaciones de memoria semantica via Mem0 REST API.
 
-Pendientes Fase 4+:
-- add_lumi_memory() / search_lumi_memory() — memorias de Lumi sobre sí misma (agent_id="lumi")
-- save_session_summary() — resumen al cierre de sesión + limpiar history.db
-- save_future_event() — eventos futuros con metadata de fecha
-- save_relational_memory() — personas con metadata entity_type/entity_name
-- get_lumi_state() / update_lumi_state() — internal_state de Lumi en Mem0
-- get_profile() / set_profile() completo — perfil viviente estructurado (user_profile JSON)
-- close_session() — genera session_summary + limpia history.db
+SQLite operations (historial, sesiones, resumenes) estan en sqlite_memory.py.
 """
 import httpx
 import logging
-import sqlite3
-import json
-from pathlib import Path
-from datetime import datetime, timezone, timedelta
 import os
-
-COL = timezone(timedelta(hours=-5))
 
 logger = logging.getLogger("mem0_client")
 logger.setLevel(logging.INFO)
@@ -33,54 +20,8 @@ MEM0_URL = os.getenv("MEM0_URL", "http://localhost:8100")
 MEM0_API_KEY = os.getenv("MEM0_ADMIN_API_KEY", "")
 TIMEOUT = 10
 
-# ── SQLite — historial de conversación (se mantiene en SQLite) ────────────────
-# El historial turno-a-turno NO va a Mem0 — es acceso secuencial, no semántico.
-DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
 
-
-def _conn():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    return sqlite3.connect(DB_PATH)
-
-
-def init_db():
-    conn = _conn()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            ts TEXT NOT NULL
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-
-def save_turn(user_id: str, role: str, content: str):
-    """Guarda un turno de conversación en SQLite."""
-    conn = _conn()
-    conn.execute(
-        "INSERT INTO history (user_id, role, content, ts) VALUES (?, ?, ?, ?)",
-        (user_id, role, content, datetime.now(COL).isoformat())
-    )
-    conn.commit()
-    conn.close()
-
-
-def get_history(user_id: str, limit: int = 10) -> list[dict]:
-    """Retorna los últimos N turnos de conversación desde SQLite."""
-    conn = _conn()
-    rows = conn.execute(
-        "SELECT role, content FROM history WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-        (user_id, limit)
-    ).fetchall()
-    conn.close()
-    return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
-
-
-# ── Mem0 — memoria semántica ──────────────────────────────────────────────────
+# ── Mem0 — memoria semantica ──────────────────────────────────────────────────
 
 def _headers() -> dict:
     return {"Content-Type": "application/json", "X-API-Key": MEM0_API_KEY}

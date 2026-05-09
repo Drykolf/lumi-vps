@@ -35,6 +35,7 @@ class ChatRequest(BaseModel):
     conversation_active: bool = True
     was_interruption: bool = False
     interrupt_context: str | None = None
+    stream: bool = True
 
 
 class ObserveRequest(BaseModel):
@@ -72,10 +73,14 @@ async def chat(req: ChatRequest, x_api_key: str = Header(...)):
         "was_interruption": req.was_interruption,
         "interrupt_context": req.interrupt_context,
     }
-    return StreamingResponse(
-        run_stream(req.user_id, req.content, metadata),
-        media_type="text/plain"
-    )
+    if req.stream:
+        return StreamingResponse(
+            run_stream(req.user_id, req.content, metadata),
+            media_type="text/plain"
+        )
+    else:
+        reply = await run(req.user_id, req.content, metadata)
+        return {"reply": reply}
 
 
 # ── Observe ───────────────────────────────────────────────────────────────────

@@ -1,0 +1,102 @@
+"""
+Session summary generator — LLM-powered session summaries every 5 turns.
+Stores in logs.db: session_summaries table.
+"""
+import logging
+import sqlite3
+import json
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
+from src.memory.sqlite_memory import get_session_turns, mark_summarized
+from src.memory.session_tracker import get_session_users
+
+logger = logging.getLogger("agent.summary")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
+    logger.addHandler(_h)
+
+COL = timezone(timedelta(hours=-5))
+
+_SUMMARY_PROMPT = """Eres Lumi. Resume esta sesion en 2-3 oraciones, en espanol, primera persona.
+Participantes: {participants}.
+Enfocate en: temas tratados, decisiones tomadas, estado emocional general.
+No incluyas hechos atomicos (ya extraidos aparte).
+
+Conversacion:
+{transcript}"""
+
+
+def _build_transcript(turns: list[dict]) -> str:
+    lines = []
+    for t in turns:
+        role_label = "Jose" if t["role"] == "user" else "Lumi"
+        lines.append(f"{role_label}: {t['content']}")
+    return "\n".join(lines)
+
+
+async def generate_summary(session_id: str) -> str | None:
+    """
+    Reads unsummarized turns for a session, calls LLM for a 2-3 sentence
+    summary, stores it in session_summaries, and marks the turns as summarized.
+    Returns the summary text or None if no turns to summarize.
+    """
+    turns = get_session_turns(session_id)
+    if not turns:
+        logger.info(f"[summary] no unsummarized turns for session={session_id}")
+        return None
+
+    user_ids = get_session_users(session_id)
+    participants = ", ".join(user_ids) if user_ids else "desconocido"
+    transcript = _build_transcript(turns)
+
+    prompt = _SUMMARY_PROMPT.format(participants=participants, transcript=transcript)
+    logger.info(f"[summary] generating for session={session_id} | turns={len(turns)} | users={participants}")
+
+    try:
+        from src.agent import llm
+        response = await llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=200,
+        )
+        summary = response.get("content", "").strip()
+    except Exception as e:
+        logger.exception(f"[summary] LLM call failed for session={session_id}: {e}")
+        return None
+
+    if not summary:
+        logger.warning(f"[summary] empty response from LLM for session={session_id}")
+        return None
+
+    # Store in session_summaries
+    DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.execute(
+        """INSERT INTO session_summaries (user_ids, summary, created_at)
+           VALUES (?, ?, ?)""",
+        (json.dumps(user_ids, ensure_ascii=False), summary, datetime.now(COL).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    # Mark turns as summarized
+    mark_summarized(session_id)
+
+    logger.info(f"[summary] stored | session={session_id} | len={len(summary)} | preview={summary[:80]}")
+    return summary
+
+
+def get_recent_summaries(user_id: str, limit: int = 3) -> list[str]:
+    """Returns the last N summaries where user_id appears in user_ids."""
+    DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+    conn = sqlite3.connect(str(DB_PATH))
+    # user_ids is JSON: search for user_id within it
+    rows = conn.execute(
+        """SELECT summary FROM session_summaries
+           WHERE user_ids LIKE ?
+           ORDER BY id DESC LIMIT ?""",
+        (f'%"{user_id}"%', limit),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in reversed(rows)]

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.agent.memory import get_history, search_relevant, get_profile
+from src.agent.memory import get_history, search_relevant, get_profile, get_recent_summaries
 from src.state.internal_state import get_state, state_to_text
 COL = timezone(timedelta(hours=-5))
 CARD_PATH = Path(__file__).parent.parent / "personality" / "lumi_card.json"
@@ -58,6 +58,10 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
 
     parts = ["[Estado interno] " + state_to_text(state)]
 
+    summaries = get_recent_summaries(user_id, limit=3)
+    if summaries:
+        parts.append("[Resumenes de sesiones anteriores]\n" + "\n".join("- " + s for s in summaries))
+
     if relevant_memories:
         parts.append("[Memorias relevantes]\n" + "\n".join("- " + m for m in relevant_memories))
     profile = await get_profile(user_id)
@@ -78,7 +82,8 @@ async def build_messages(user_id: str, message: str, metadata: dict) -> list[dic
     dynamic = await _build_dynamic_suffix(user_id, message, metadata)
     system_prompt = cached + "\n\n---\n\n" + dynamic
 
-    history = get_history(user_id, limit=10)
+    history = get_history(user_id, limit=5)
+    # TODO: trim_history_after — mark summarized turns for context exclusion, keep only unsummarized in active window
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)

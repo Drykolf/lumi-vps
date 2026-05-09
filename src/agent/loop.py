@@ -2,13 +2,14 @@
 Orquestador principal — sección 2.2 y loop del manual.
 Ciclo: clasificar → contexto → LLM → tools → memoria → retornar.
 """
+import asyncio
 import json
 import logging
 import re
 
 from src.agent import router, tools, llm
 from src.agent.context import build_messages
-from src.agent.memory import save_turn, init_db, init_core_db, add_memory_explicit
+from src.agent.memory import save_turn, init_db, init_core_db, add_memory_explicit, record_turn, generate_summary, reset_turns
 from src.state.internal_state import init_state_table
 
 logger = logging.getLogger("agent.loop")
@@ -94,14 +95,22 @@ def _inject_save_verification(messages: list[dict], result: dict, category: str)
         )
     messages[0]["content"] = msg + "\n\n" + messages[0]["content"]
 
+
+async def _run_summary(session_id: str):
+    """Fire-and-forget: generate summary then reset turn counter."""
+    await generate_summary(session_id)
+    reset_turns(session_id)
+
+
 async def run_stream(user_id: str, message: str, metadata: dict):
     task_type = router.classify(message)
     logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
+    sid = metadata.get("session_id", "default")
 
     if task_type == "long_task":
-        save_turn(user_id, "user", message)
+        save_turn(user_id, "user", message, sid)
         reply = "[thinking] Dame un momento, esto toma un poco más de tiempo."
-        save_turn(user_id, "assistant", reply)
+        save_turn(user_id, "assistant", reply, sid)
         yield reply
         return
 
@@ -110,7 +119,7 @@ async def run_stream(user_id: str, message: str, metadata: dict):
         logger.info(f"[explicit_save] category={category} | user_id={user_id}")
         processed = await _process_explicit_memory(message)
         result = await add_memory_explicit(processed["memory"], user_id, processed.get("category", category))
-        save_turn(user_id, "user", message)
+        save_turn(user_id, "user", message, sid)
         logger.info(f"[explicit_save] saved to Mem0 | success={result.get('success')} | category={result.get('category')}")
         messages = await build_messages(user_id, message, metadata)
         _inject_save_verification(messages, result, processed.get("category", category))
@@ -122,7 +131,7 @@ async def run_stream(user_id: str, message: str, metadata: dict):
             reply_text = f"[neutral] Listo, guarde {cat_name} en mi memoria."
         yield reply_text
 
-        save_turn(user_id, "assistant", reply_text)
+        save_turn(user_id, "assistant", reply_text, sid)
         logger.info(f"[explicit_save] stream response | reply_len={len(reply_text)} | preview={reply_text[:80]}")
         return
 
@@ -175,8 +184,13 @@ async def run_stream(user_id: str, message: str, metadata: dict):
         full_reply += chunk
         yield chunk
 
-    save_turn(user_id, "user", message)
-    save_turn(user_id, "assistant", full_reply)
+    save_turn(user_id, "user", message, sid)
+    save_turn(user_id, "assistant", full_reply, sid)
+
+    turn_count = record_turn(sid, user_id)
+    # TODO: heartbeat — trigger summary after 1h inactivity per session (time-based)
+    if turn_count % 5 == 0:
+        asyncio.create_task(_run_summary(sid))
     
 async def run(user_id: str, message: str, metadata: dict) -> str:
     """
@@ -187,12 +201,13 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
     # ── 1. Clasificación pre-LLM ─────────────────────────────────────────────
     task_type = router.classify(message)
     logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
+    sid = metadata.get("session_id", "default")
 
     if task_type == "long_task":
         # Fase 3: respuesta inmediata, async real llega en Fase 4
-        save_turn(user_id, "user", message)
+        save_turn(user_id, "user", message, sid)
         reply = "[thinking] Dame un momento, esto toma un poco más de tiempo."
-        save_turn(user_id, "assistant", reply)
+        save_turn(user_id, "assistant", reply, sid)
         return reply
 
     if task_type == "web_search":
@@ -206,14 +221,14 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
         processed = await _process_explicit_memory(message)
         result = await add_memory_explicit(processed["memory"], user_id, processed.get("category", category))
         logger.info(f"[explicit_save] save result={result}")
-        save_turn(user_id, "user", message)
+        save_turn(user_id, "user", message, sid)
 
         messages = await build_messages(user_id, message, metadata)
         _inject_save_verification(messages, result, processed.get("category", category))
 
         response_msg = await llm.chat(messages)
         reply_text = response_msg.get("content", "")
-        save_turn(user_id, "assistant", reply_text)
+        save_turn(user_id, "assistant", reply_text, sid)
         return reply_text
         
     # ── 2. Construir contexto ────────────────────────────────────────────────
@@ -263,7 +278,12 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
         reply_text = "[neutral] No logré resolver esto en el tiempo esperado."
 
     # ── 4. Guardar en memoria ────────────────────────────────────────────────
-    save_turn(user_id, "user", message)
-    save_turn(user_id, "assistant", reply_text)
+    save_turn(user_id, "user", message, sid)
+    save_turn(user_id, "assistant", reply_text, sid)
+
+    turn_count = record_turn(sid, user_id)
+    # TODO: heartbeat — trigger summary after 1h inactivity per session (time-based)
+    if turn_count % 5 == 0:
+        asyncio.create_task(_run_summary(sid))
 
     return reply_text

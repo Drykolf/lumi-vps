@@ -77,7 +77,16 @@ async def _heartbeat_loop(interval: int = 60):
         for user_id in dead:
             _connections.pop(user_id, None)
 
-
+async def push_message(user_id: str, text: str) -> bool:
+    ws = self._connections.get(user_id)
+    if not ws:
+        return False
+    await ws.send_json({
+        "type": "push_message",
+        "content": text,
+    })
+    return True
+    
 async def start_heartbeat():
     asyncio.ensure_future(_heartbeat_loop())
     
