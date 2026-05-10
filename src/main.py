@@ -6,7 +6,7 @@ import os
 import httpx
 import json
 from dotenv import load_dotenv
-from src.agent.loop import run,run_stream
+from src.agent.core import run, run_stream
 from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
 from src.memory.facade import set_profile, get_profile
 from src.utils.logger import get_logger, configure_root

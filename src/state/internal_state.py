@@ -164,13 +164,3 @@ def check_emotional_honesty_mode() -> bool:
             _write_state(state)
 
     return state["emotional_honesty_mode"]
-
-
-# ── Legacy compat ─────────────────────────────────────────────────────────────
-
-def update_state(user_id: str, mood: str = None, energy: str = None,
-                 focus: str = None):
-    """Legacy stub. No longer writes string fields; the mood_policy.md numeric
-    system replaces this. Present so existing imports do not break.
-    Use apply_deltas() for the new system."""
-    pass

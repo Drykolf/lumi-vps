@@ -76,23 +76,12 @@ async def _heartbeat_loop(interval: int = 60):
                 logger.info(f"Bridge heartbeat: conexion muerta detectada — {user_id}")
         for user_id in dead:
             _connections.pop(user_id, None)
-
-async def push_message(user_id: str, text: str) -> bool:
-    ws = self._connections.get(user_id)
-    if not ws:
-        return False
-    await ws.send_json({
-        "type": "push_message",
-        "content": text,
-    })
-    return True
-    
-async def start_heartbeat():
-    asyncio.ensure_future(_heartbeat_loop())
     
 def is_connected(user_id: str) -> bool:
     return user_id in _connections
-
+    
+async def start_heartbeat():
+    asyncio.ensure_future(_heartbeat_loop())
 
 def connected_users() -> list[str]:
     return list(_connections.keys())

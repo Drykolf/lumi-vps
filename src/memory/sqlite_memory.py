@@ -75,17 +75,21 @@ def get_history(user_id: str, limit: int = 10) -> list[dict]:
     return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
 
-def get_session_turns(session_id: str) -> list[dict]:
-    """Retorna los turnos no resumidos de una sesion, en orden cronologico."""
+def get_session_turns(session_id: str, include_summarized: bool = False,
+                      limit: int = 0) -> list[dict]:
+    """Retorna los turnos de una sesion, en orden cronologico.
+    include_summarized=True incluye turnos ya resumidos.
+    limit=0 significa ilimitado."""
     conn = _conn()
+    columns = "role, content, user_id"
+    where = f"session_id = ?{' AND summarized = 0' if not include_summarized else ''}"
+    limit_sql = f"LIMIT {limit}" if limit else ""
     rows = conn.execute(
-        """SELECT role, content FROM history
-           WHERE session_id = ? AND summarized = 0
-           ORDER BY id ASC""",
+        f"SELECT {columns} FROM history WHERE {where} ORDER BY id ASC {limit_sql}",
         (session_id,)
     ).fetchall()
     conn.close()
-    return [{"role": r[0], "content": r[1]} for r in rows]
+    return [{"role": r[0], "content": r[1], "user_id": r[2]} for r in rows]
 
 
 def mark_summarized(session_id: str):
