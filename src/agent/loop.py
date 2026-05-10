@@ -3,21 +3,16 @@ Orquestador principal — sección 2.2 y loop del manual.
 Ciclo: clasificar → contexto → LLM → tools → memoria → retornar.
 """
 import asyncio
-import json
-import logging
-import re
 
-from src.agent import router, tools, llm
+from src.agent import router, tools
+from src.llm.factory import chat, chat_stream
 from src.agent.context import build_messages
-from src.agent.memory import save_turn, init_db, init_core_db, add_memory_explicit, record_turn, generate_summary, reset_turns
+from src.memory.facade import save_turn, init_db, init_core_db, add_memory_explicit, record_turn, generate_summary, reset_turns, process_explicit_memory
 from src.state.internal_state import init_state_table
 
-logger = logging.getLogger("agent.loop")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _handler = logging.StreamHandler()
-    _handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
-    logger.addHandler(_handler)
+from src.utils.logger import get_logger
+
+logger = get_logger("agent.loop")
 
 MAX_ITERATIONS = 10
 
@@ -31,50 +26,6 @@ _CATEGORY_NAMES = {
     "recipe": "receta", "link": "enlace", "note": "nota",
     "code": "codigo", "reference": "referencia",
 }
-
-_PROMPT_PROCESS_EXPLICIT = """Reestructura el siguiente mensaje en una memoria para Mem0.
-Reglas:
-- Español, tercera persona, conciso y factual.
-- Empieza con "guardó" o "anotó" según corresponda.
-- Si es receta: incluye nombre, ingredientes y preparación en un solo párrafo.
-- Si es link: "guardó un enlace: [URL] - [descripción]".
-- Si es nota: "anotó: [contenido]".
-- Si es código: "guardó un código de [lenguaje]: [descripción]. [código]".
-- Si es referencia: "guardó una referencia de [fuente]: [descripción]".
-- ELIMINA frases como "necesito que guardes", "por favor", "para cuando pregunte", etc.
-- NO incluyas nombre del usuario.
-- NO inventes información que no esté en el mensaje.
-
-Responde SOLO con un JSON en una línea:
-{"category": "recipe|link|note|code|reference", "memory": "texto de la memoria"}"""
-
-
-async def _process_explicit_memory(message: str) -> dict:
-    """Reestructura un mensaje de guardado explícito en formato de memoria limpio usando LLM."""
-    logger.info(f"[explicit_save] processing memory via LLM | message_len={len(message)}")
-    try:
-        response = await llm.chat(
-            messages=[
-                {"role": "system", "content": _PROMPT_PROCESS_EXPLICIT},
-                {"role": "user", "content": message},
-            ],
-            max_tokens=300,
-        )
-        content = response.get("content", "").strip()
-        logger.info(f"[explicit_save] LLM raw response | len={len(content)} | preview={content[:100]}")
-        match = re.search(
-            r'\{.*"category"\s*:\s*"(recipe|link|note|code|reference)"\s*,\s*"memory"\s*:\s*".*"\s*\}',
-            content, re.DOTALL,
-        )
-        if match:
-            parsed = json.loads(match.group(0))
-            logger.info(f"[explicit_save] parsed memory | category={parsed['category']} | mem_len={len(parsed['memory'])}")
-            return parsed
-        logger.warning(f"[explicit_save] JSON regex did not match LLM response")
-    except Exception as e:
-        logger.exception(f"[explicit_save] _process_explicit_memory failed: {e}")
-    logger.info(f"[explicit_save] falling back to raw message as memory")
-    return {"category": "note", "memory": message}
 
 
 def _inject_save_verification(messages: list[dict], result: dict, category: str):
@@ -116,13 +67,13 @@ async def _handle_long_task(user_id: str, message: str, sid: str) -> str:
 async def _handle_explicit_save(user_id: str, message: str, sid: str, metadata: dict) -> str:
     category = router.detect_category(message)
     logger.info(f"[explicit_save] category={category} | user_id={user_id}")
-    processed = await _process_explicit_memory(message)
+    processed = await process_explicit_memory(message)
     result = await add_memory_explicit(processed["memory"], user_id, processed.get("category", category))
     save_turn(user_id, "user", message, sid)
     logger.info(f"[explicit_save] saved to Mem0 | success={result.get('success')} | category={result.get('category')}")
     messages = await build_messages(user_id, message, metadata)
     _inject_save_verification(messages, result, processed.get("category", category))
-    response_msg = await llm.chat(messages)
+    response_msg = await chat(messages)
     reply_text = response_msg.get("content", "")
     if not reply_text:
         cat_name = _CATEGORY_NAMES.get(processed.get("category", category), "eso")
@@ -136,7 +87,7 @@ async def _handle_explicit_save(user_id: str, message: str, sid: str, metadata: 
 async def _run_tool_loop(messages: list[dict], user_id: str) -> tuple[list[dict], str | None]:
     schemas = tools.all_schemas()
     for _ in range(MAX_ITERATIONS):
-        response_msg = await llm.chat(messages, tool_schemas=schemas or None)
+        response_msg = await chat(messages, tool_schemas=schemas or None)
         reply_text = response_msg.get("content", "")
 
         if tools.has_tool_calls(response_msg):
@@ -219,7 +170,7 @@ async def run_stream(user_id: str, message: str, metadata: dict):
     messages, _reply = await _run_tool_loop(messages, user_id)
 
     full_reply = ""
-    async for chunk in llm.chat_stream(messages):
+    async for chunk in chat_stream(messages):
         full_reply += chunk
         yield chunk
 

@@ -5,15 +5,11 @@ Operaciones de memoria semantica via Mem0 REST API.
 SQLite operations (historial, sesiones, resumenes) estan en sqlite_memory.py.
 """
 import httpx
-import logging
 import os
 
-logger = logging.getLogger("mem0_client")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
-    logger.addHandler(_h)
+from src.utils.logger import get_logger
+
+logger = get_logger("mem0_client")
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MEM0_URL = os.getenv("MEM0_URL", "http://localhost:8100")
@@ -114,3 +110,53 @@ async def save_explicit(content: str, user_id: str, category: str = "note") -> d
     except Exception as e:
         logger.warning(f"mem0 save_explicit failed: {e}")
         return {"success": False, "error": str(e)}
+
+
+# ── Explicit memory preprocessing ──────────────────────────────────────────────
+
+_PROMPT_PROCESS_EXPLICIT = """Reestructura el siguiente mensaje en una memoria para Mem0.
+Reglas:
+- Espanol, tercera persona, conciso y factual.
+- Empieza con "guardo" o "anoto" segun corresponda.
+- Si es receta: incluye nombre, ingredientes y preparacion en un solo parrafo.
+- Si es link: "guardo un enlace: [URL] - [descripcion]".
+- Si es nota: "anoto: [contenido]".
+- Si es codigo: "guardo un codigo de [lenguaje]: [descripcion]. [codigo]".
+- Si es referencia: "guardo una referencia de [fuente]: [descripcion]".
+- ELIMINA frases como "necesito que guardes", "por favor", "para cuando pregunte", etc.
+- NO incluyas nombre del usuario.
+- NO inventes informacion que no este en el mensaje.
+
+Responde SOLO con un JSON en una linea:
+{"category": "recipe|link|note|code|reference", "memory": "texto de la memoria"}"""
+
+
+async def process_explicit_memory(message: str) -> dict:
+    """Reestructura un mensaje de guardado explicito en formato de memoria limpio usando LLM."""
+    import json, re
+    from src.llm.factory import chat
+
+    logger.info(f"[explicit_save] processing memory via LLM | message_len={len(message)}")
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _PROMPT_PROCESS_EXPLICIT},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=300,
+        )
+        content = response.get("content", "").strip()
+        logger.info(f"[explicit_save] LLM raw response | len={len(content)} | preview={content[:100]}")
+        match = re.search(
+            r'\{.*"category"\s*:\s*"(recipe|link|note|code|reference)"\s*,\s*"memory"\s*:\s*".*"\s*\}',
+            content, re.DOTALL,
+        )
+        if match:
+            parsed = json.loads(match.group(0))
+            logger.info(f"[explicit_save] parsed memory | category={parsed['category']} | mem_len={len(parsed['memory'])}")
+            return parsed
+        logger.warning("[explicit_save] JSON regex did not match LLM response")
+    except Exception as e:
+        logger.exception(f"[explicit_save] process_explicit_memory failed: {e}")
+    logger.info("[explicit_save] falling back to raw message as memory")
+    return {"category": "note", "memory": message}

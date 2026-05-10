@@ -72,3 +72,20 @@ def reset_turns(session_id: str):
     conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
+
+
+def get_stale_sessions(inactive_minutes: int = 30) -> list[str]:
+    """Return session_ids where last_turn_at is older than inactive_minutes."""
+    conn = _conn()
+    rows = conn.execute(
+        "SELECT session_id, last_turn_at FROM session_turns WHERE last_turn_at IS NOT NULL"
+    ).fetchall()
+    conn.close()
+
+    now = datetime.now(COL)
+    stale = []
+    for row in rows:
+        last_turn = datetime.fromisoformat(row["last_turn_at"])
+        if (now - last_turn).total_seconds() > inactive_minutes * 60:
+            stale.append(row["session_id"])
+    return stale

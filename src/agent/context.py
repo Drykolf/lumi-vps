@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.agent.memory import get_history, search_relevant, get_profile, get_recent_summaries
+from src.memory.facade import get_history, search_relevant, get_profile, get_recent_summaries
 from src.state.internal_state import get_state, state_to_text
 COL = timezone(timedelta(hours=-5))
 CARD_PATH = Path(__file__).parent.parent / "personality" / "lumi_card.json"

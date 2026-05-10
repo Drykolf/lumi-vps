@@ -2,20 +2,15 @@
 Session summary generator — LLM-powered session summaries every 5 turns.
 Stores in logs.db: session_summaries table.
 """
-import logging
 import sqlite3
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from src.memory.sqlite_memory import get_session_turns, mark_summarized
 from src.memory.session_tracker import get_session_users
+from src.utils.logger import get_logger
 
-logger = logging.getLogger("agent.summary")
-logger.setLevel(logging.INFO)
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
-    logger.addHandler(_h)
+logger = get_logger("memory.summary")
 
 COL = timezone(timedelta(hours=-5))
 
@@ -55,8 +50,8 @@ async def generate_summary(session_id: str) -> str | None:
     logger.info(f"[summary] generating for session={session_id} | turns={len(turns)} | users={participants}")
 
     try:
-        from src.agent import llm
-        response = await llm.chat(
+        from src.llm.factory import chat
+        response = await chat(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
         )

@@ -22,6 +22,7 @@ from src.memory.mem0_client import (
     get_profile,
     set_profile,
     save_explicit,
+    process_explicit_memory,
 )
 
 # Alias: loop.py expects add_memory_explicit per memory_policy.md naming
@@ -38,7 +39,7 @@ from src.memory.core_state import (
     add_relation,
     infer_family_relations,
 )
-from src.memory.session_tracker import record_turn, get_session_users, reset_turns
+from src.memory.session_tracker import record_turn, get_session_users, reset_turns, get_stale_sessions
 from src.memory.summary import generate_summary, get_recent_summaries
 
 __all__ = [
@@ -54,6 +55,7 @@ __all__ = [
     "set_profile",
     "save_explicit",
     "add_memory_explicit",
+    "process_explicit_memory",
     "get_person",
     "find_person_by_name",
     "create_person",
@@ -65,6 +67,8 @@ __all__ = [
     "infer_family_relations",
     "record_turn",
     "get_session_users",
+    "reset_turns",
+    "get_stale_sessions",
     "generate_summary",
     "get_recent_summaries",
 ]

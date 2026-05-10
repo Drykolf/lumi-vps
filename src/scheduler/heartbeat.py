@@ -3,16 +3,10 @@ import logging
 from datetime import timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from src.utils.logger import get_logger
 
 COL = timezone(timedelta(hours=-5))
-
-logger = logging.getLogger("scheduler.heartbeat")
-logger.setLevel(logging.INFO)
-logger.propagate = False
-if not logger.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s] %(message)s"))
-    logger.addHandler(_h)
+logger = get_logger("scheduler.heartbeat")
 
 # Suppress APScheduler's own job lifecycle logs
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -22,9 +16,25 @@ scheduler = AsyncIOScheduler(timezone=COL)
 
 # ── Active jobs ────────────────────────────────────────────────────────────────
 
-@scheduler.scheduled_job("interval", minutes=5)
+#@scheduler.scheduled_job("interval", minutes=5)
 async def beat():
     logger.info("beat — Lumi scheduler alive")
+
+
+@scheduler.scheduled_job("interval", minutes=10)
+async def idle_session_check():
+    from src.memory.session_tracker import get_stale_sessions, reset_turns
+    from src.memory.summary import generate_summary
+    logger.info("idle sessions check")
+    stale = get_stale_sessions(inactive_minutes=30)
+    if not stale:
+        return
+
+    logger.info("idle sessions found: %d", len(stale))
+    for sid in stale:
+        summary = await generate_summary(sid)
+        reset_turns(sid)
+        logger.info("  session=%s summarized=%s", sid, bool(summary))
 
 
 # ── Future jobs (TODOs) ────────────────────────────────────────────────────────
@@ -33,10 +43,6 @@ async def beat():
 # async def morning_greeting():
 #     """Greet Jose after waking up. Push via bridge if connected,
 #     queue as pending message otherwise."""
-
-# TODO: @scheduler.scheduled_job('interval', minutes=10)
-# async def idle_session_check():
-#     """Check sessions with >1h inactivity → trigger summary via generate_summary()."""
 
 # TODO: @scheduler.scheduled_job('cron', day_of_week='mon', hour=0, minute=0)
 # async def weekly_decay():

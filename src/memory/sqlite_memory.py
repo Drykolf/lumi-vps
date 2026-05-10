@@ -19,9 +19,8 @@ def _conn():
 def init_db():
     """Create all SQLite tables for conversation and session tracking."""
     conn = _conn()
-    conn.execute("DROP TABLE IF EXISTS history")
     conn.execute("""
-        CREATE TABLE history (
+        CREATE TABLE IF NOT EXISTS history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id TEXT NOT NULL,
             role TEXT NOT NULL,

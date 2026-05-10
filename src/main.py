@@ -3,19 +3,21 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Literal
 import os
-import logging
 import httpx
 import json
 from dotenv import load_dotenv
 from src.agent.loop import run,run_stream
 from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
-from src.agent.memory import set_profile, get_profile
+from src.memory.facade import set_profile, get_profile
+from src.utils.logger import get_logger, configure_root
 import src.scheduler.heartbeat as scheduler
 
 load_dotenv()
 
+import logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("main")
+configure_root()
+logger = get_logger("main")
 
 API_KEY = os.getenv("LUMI_API_KEY")
 
