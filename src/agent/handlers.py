@@ -2,10 +2,13 @@
 Message type handlers — dispatched by the orchestrator.
 Each handler takes a classified message and returns the reply.
 """
+import json
+import re
+
 from src.agent import router
 from src.llm.factory import chat
 from src.agent.context import build_messages
-from src.memory.facade import add_memory_explicit, process_explicit_memory
+from src.memory.facade import add_memory_explicit
 from src.utils.logger import get_logger
 
 logger = get_logger("agent.handlers")
@@ -14,6 +17,50 @@ _CATEGORY_NAMES = {
     "recipe": "receta", "link": "enlace", "note": "nota",
     "code": "codigo", "reference": "referencia",
 }
+
+_PROMPT_PROCESS_EXPLICIT = """Reestructura el siguiente mensaje en una memoria para Mem0.
+Reglas:
+- Espanol, tercera persona, conciso y factual.
+- Empieza con "guardo" o "anoto" segun corresponda.
+- Si es receta: incluye nombre, ingredientes y preparacion en un solo parrafo.
+- Si es link: "guardo un enlace: [URL] - [descripcion]".
+- Si es nota: "anoto: [contenido]".
+- Si es codigo: "guardo un codigo de [lenguaje]: [descripcion]. [codigo]".
+- Si es referencia: "guardo una referencia de [fuente]: [descripcion]".
+- ELIMINA frases como "necesito que guardes", "por favor", "para cuando pregunte", etc.
+- NO incluyas nombre del usuario.
+- NO inventes informacion que no este en el mensaje.
+
+Responde SOLO con un JSON en una linea:
+{"category": "recipe|link|note|code|reference", "memory": "texto de la memoria"}"""
+
+
+async def process_explicit_memory(message: str) -> dict:
+    """Reestructura un mensaje de guardado explicito en formato de memoria limpio usando LLM."""
+    logger.info(f"[explicit_save] processing memory via LLM | message_len={len(message)}")
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _PROMPT_PROCESS_EXPLICIT},
+                {"role": "user", "content": message},
+            ],
+            max_tokens=300,
+        )
+        content = response.get("content", "").strip()
+        logger.info(f"[explicit_save] LLM raw response | len={len(content)} | preview={content[:100]}")
+        match = re.search(
+            r'\{.*"category"\s*:\s*"(recipe|link|note|code|reference)"\s*,\s*"memory"\s*:\s*".*"\s*\}',
+            content, re.DOTALL,
+        )
+        if match:
+            parsed = json.loads(match.group(0))
+            logger.info(f"[explicit_save] parsed memory | category={parsed['category']} | mem_len={len(parsed['memory'])}")
+            return parsed
+        logger.warning("[explicit_save] JSON regex did not match LLM response")
+    except Exception as e:
+        logger.exception(f"[explicit_save] process_explicit_memory failed: {e}")
+    logger.info("[explicit_save] falling back to raw message as memory")
+    return {"category": "note", "memory": message}
 
 
 def _inject_save_verification(messages: list[dict], result: dict, category: str):

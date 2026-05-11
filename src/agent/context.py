@@ -1,47 +1,24 @@
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.memory.facade import get_history, search_relevant, get_profile, get_recent_summaries
+from src.memory.facade import get_history, search_relevant, get_user_information, get_recent_summaries
 from src.state.internal_state import get_state, state_to_text
+
 COL = timezone(timedelta(hours=-5))
-CARD_PATH = Path(__file__).parent.parent / "personality" / "lumi_card.json"
+SOUL_PATH = Path(__file__).parent.parent / "personality" / "lumi_soul.md"
 
 _cached_prefix = None
 
 
-def _render_card(card: dict) -> str:
-    data = card["data"]
-
-    sections = []
-
-    # [1] Runtime directives primero — máxima prioridad
-    if data.get("system_prompt"):
-        sections.append("# LUMI — Directives (HIGHEST PRIORITY)\n\n" + data["system_prompt"])
-
-    # [2] Identidad completa
-    sections.append("# LUMI — Identity\n\n" + data["description"])
-
-    # [3] Personalidad condensada
-    sections.append("## Personality\n\n" + data["personality"])
-
-    # [4] Escenario operativo
-    sections.append("## Context\n\n" + data["scenario"])
-
-    # [5] Ejemplos — convertir sintaxis SillyTavern a texto plano
-    if data.get("mes_example"):
-        examples = (data["mes_example"]
-            .replace("{{user}}", "Jose")
-            .replace("{{char}}", "Lumi")
-            .replace("<START>", "---"))
-        sections.append("## Dialogue Examples\n\n" + examples)
-
-    return "\n\n---\n\n".join(sections)
-
 def _build_cached_prefix() -> str:
-    if not CARD_PATH.exists():
-        return "Eres Lumi, asistente personal de Jose Barco. Responde en español colombiano neutro. Emotion tag obligatorio al inicio: [neutral], [happy], [sad], [thinking], [surprised], [playful]."
-    card = json.loads(CARD_PATH.read_text(encoding="utf-8"))
-    return _render_card(card)
+    if SOUL_PATH.exists():
+        return SOUL_PATH.read_text(encoding="utf-8")
+
+    return (
+        "Eres Lumi, asistente personal de Jose Barco. "
+        "Responde en espanol colombiano neutro. "
+        "Emotion tag obligatorio al inicio: [neutral], [happy], [sad], [thinking], [surprised], [playful]."
+    )
 
 
 def get_cached_prefix() -> str:
@@ -64,12 +41,22 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
 
     if relevant_memories:
         parts.append("[Memorias relevantes]\n" + "\n".join("- " + m for m in relevant_memories))
-    profile = await get_profile(user_id)
-    if profile:
-        memories_text = "\n".join("- " + m for m in profile.get("memories", []))
-        parts.append(f"[Usuario] {user_id}\n{memories_text}")
+
+    info = get_user_information(user_id)
+    if info["profile"]:
+        parts.append(f"[Usuario] {user_id}\n{json.dumps(info['profile'], ensure_ascii=False, indent=2)}")
     else:
         parts.append(f"[Usuario] {user_id}")
+
+    if info["interest"]:
+        pi = info["interest"]
+        parts.append(
+            f"[Interes] score={pi['interest_score']:.2f} | "
+            f"tone={pi['emotional_tone']} | "
+            f"status={pi['status']} | "
+            f"mentions={pi['mention_count']}"
+        )
+
     channel = metadata.get("channel", "desktop")
     session_id = metadata.get("session_id", "unknown")
     parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now)

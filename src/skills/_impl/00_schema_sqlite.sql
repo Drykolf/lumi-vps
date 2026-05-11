@@ -1,24 +1,25 @@
 -- LUMI core_state.db
 -- Lives on the VPS alongside the conversation history database.
 -- This is the SOURCE OF TRUTH for:
---   * Person registry and interest_score
+--   * Person interest tracking (score, tone, status)
+--   * User structured profiles (name, location, static data)
 --   * Relations between third parties
 --   * Lumi's internal dynamic state
 --   * Pending skill proposals (skill_evolution)
 --
 -- Mem0 (pgvector) stores the SEMANTIC MEMORIES about each person,
 -- linked to this DB via metadata.person_id.
--- Conversation history stays in its own SQLite (history.db) — separate concern.
+-- Conversation history stays in its own SQLite (logs.db) — separate concern.
 
 PRAGMA foreign_keys = ON;
 
 -- ============================================================
--- PERSONS — registry of every named entity Lumi knows about
+-- PERSON_INTEREST — Lumi's emotional calculus toward each person
 -- ============================================================
-CREATE TABLE IF NOT EXISTS persons (
+-- Names live in Mem0 (semantic facts) or user_profiles (for Jose).
+-- This table tracks only the relationship dynamic.
+CREATE TABLE IF NOT EXISTS person_interest (
     person_id        TEXT PRIMARY KEY,                    -- e.g. "jose", "gloria1", "carlos_jefe"
-    canonical_name   TEXT NOT NULL,                       -- "Gloria"
-    aliases          TEXT,                                -- JSON array, e.g. '["mami","mamá","madre"]'
     is_jose          INTEGER NOT NULL DEFAULT 0,          -- 1 only for the row where person_id="jose"
     interest_score   REAL    NOT NULL DEFAULT 0.10,
     emotional_tone   TEXT    NOT NULL DEFAULT 'neutral',  -- positive | neutral | negative | complex
@@ -35,20 +36,31 @@ CREATE TABLE IF NOT EXISTS persons (
     CHECK (is_jose = 1 OR interest_score <= 0.69)
 );
 
-CREATE INDEX IF NOT EXISTS idx_persons_score          ON persons(interest_score DESC);
-CREATE INDEX IF NOT EXISTS idx_persons_last_mentioned ON persons(last_mentioned);
-CREATE INDEX IF NOT EXISTS idx_persons_status         ON persons(status);
+CREATE INDEX IF NOT EXISTS idx_person_interest_score          ON person_interest(interest_score DESC);
+CREATE INDEX IF NOT EXISTS idx_person_interest_last_mentioned ON person_interest(last_mentioned);
+CREATE INDEX IF NOT EXISTS idx_person_interest_status         ON person_interest(status);
 
 -- Seed Jose
-INSERT OR IGNORE INTO persons (person_id, canonical_name, is_jose, interest_score, status)
-VALUES ('jose', 'Jose', 1, 0.70, 'active');
+INSERT OR IGNORE INTO person_interest (person_id, is_jose, interest_score, status)
+VALUES ('jose', 1, 0.70, 'active');
+
+-- ============================================================
+-- USER_PROFILES — structured static data about users
+-- ============================================================
+-- Stores semi-static user info (name, location, language) as JSON.
+-- Dynamic facts (projects, preferences, goals) go to Mem0 with metadata.
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id    TEXT PRIMARY KEY,
+    data       TEXT NOT NULL,                              -- JSON blob
+    updated_at TEXT NOT NULL
+);
 
 -- ============================================================
 -- RELATIONS — directed connections between THIRD PARTIES
 -- ============================================================
 -- IMPORTANT: relations are NEVER stored between Lumi and a person.
 -- Lumi's stance toward a person is fully captured by:
---   persons.interest_score  + persons.emotional_tone  + Mem0 memories.
+--   person_interest.score  + person_interest.emotional_tone  + Mem0 memories.
 -- This table models Jose's social graph from Lumi's perspective.
 CREATE TABLE IF NOT EXISTS relations (
     relation_id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,8 +76,8 @@ CREATE TABLE IF NOT EXISTS relations (
     CHECK (from_person_id != to_person_id),
     CHECK (from_person_id != 'lumi' AND to_person_id != 'lumi'),  -- enforce: no Lumi relations
     UNIQUE (from_person_id, to_person_id, relation_type),
-    FOREIGN KEY (from_person_id) REFERENCES persons(person_id) ON DELETE CASCADE,
-    FOREIGN KEY (to_person_id)   REFERENCES persons(person_id) ON DELETE CASCADE
+    FOREIGN KEY (from_person_id) REFERENCES person_interest(person_id) ON DELETE CASCADE,
+    FOREIGN KEY (to_person_id)   REFERENCES person_interest(person_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_person_id);

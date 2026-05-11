@@ -1,12 +1,13 @@
 """
-Core state database — persons, relations, lumi_state, skill_proposals.
+Core state database — person_interest, user_profiles, relations, lumi_state.
 Implements interest_policy.md and relation_policy.md storage layer.
 
 Tables (from 00_schema_sqlite.sql):
-  persons      — registry of every named entity Lumi knows
-  relations    — directed connections between third parties
-  lumi_state   — Lumi's own dynamic internal state (JSON)
-  skill_proposals — pending skill evolution drafts
+  person_interest  — Lumi's emotional calculus toward each person
+  user_profiles    — structured static data about users (JSON)
+  relations        — directed connections between third parties
+  lumi_state       — Lumi's own dynamic internal state (JSON)
+  skill_proposals  — pending skill evolution drafts
 
 Uses core_state.db (separate from logs.db for conversation history).
 """
@@ -36,84 +37,75 @@ def init_core_db():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Person registry
+# Public API — use these from outside this module
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def get_person(person_id: str) -> dict | None:
+def get_user_information(user_id: str) -> dict:
+    """Returns {profile: dict|None, interest: dict|None} in one call."""
+    return {
+        "profile": _get_user_profile(user_id),
+        "interest": _get_person(user_id),
+    }
+
+
+def set_user_information(user_id: str, profile: dict = None,
+                         interest: dict = None):
+    """Update profile JSON and/or interest fields for a user."""
+    if profile is not None:
+        _set_user_profile(user_id, profile)
+    if interest is not None:
+        _update_person_interest(user_id, **interest)
+
+
+def create_person_interest(person_id: str, is_jose: int = 0,
+                           interest_score: float = 0.10) -> dict:
+    """Create an interest row for a new person."""
+    conn = _conn()
+    conn.execute(
+        """INSERT OR IGNORE INTO person_interest (person_id, is_jose, interest_score)
+           VALUES (?, ?, ?)""",
+        (person_id, is_jose, interest_score),
+    )
+    conn.commit()
+    conn.close()
+    return _get_person(person_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Private — person interest
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_person(person_id: str) -> dict | None:
     conn = _conn()
     row = conn.execute(
-        "SELECT * FROM persons WHERE person_id = ?", (person_id,)
+        "SELECT * FROM person_interest WHERE person_id = ?", (person_id,)
     ).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def find_person_by_name(name: str) -> dict | None:
-    conn = _conn()
-    row = conn.execute(
-        "SELECT * FROM persons WHERE canonical_name = ?", (name,)
-    ).fetchone()
-    if row:
-        conn.close()
-        return dict(row)
-
-    rows = conn.execute(
-        "SELECT * FROM persons WHERE aliases IS NOT NULL"
-    ).fetchall()
-    conn.close()
-
-    for r in rows:
-        try:
-            aliases = json.loads(r["aliases"])
-            if name in aliases:
-                return dict(r)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return None
-
-
-def create_person(person_id: str, canonical_name: str,
-                  aliases: list[str] | None = None,
-                  is_jose: int = 0,
-                  interest_score: float = 0.10) -> dict:
-    conn = _conn()
-    aliases_json = json.dumps(aliases, ensure_ascii=False) if aliases else None
-    conn.execute(
-        """INSERT INTO persons (person_id, canonical_name, aliases, is_jose, interest_score)
-           VALUES (?, ?, ?, ?, ?)""",
-        (person_id, canonical_name, aliases_json, is_jose, interest_score),
-    )
-    conn.commit()
-    conn.close()
-    return get_person(person_id)
-
-
-def update_person(person_id: str, **kwargs) -> dict | None:
-    allowed = {"canonical_name", "interest_score", "emotional_tone",
-               "status", "notes", "session_delta", "aliases"}
+def _update_person_interest(person_id: str, **kwargs) -> dict | None:
+    allowed = {"interest_score", "emotional_tone", "status",
+               "notes", "session_delta"}
     updates = {k: v for k, v in kwargs.items() if k in allowed}
     if not updates:
-        return get_person(person_id)
-
-    # Serialize aliases if passed as a list
-    if "aliases" in updates and isinstance(updates["aliases"], list):
-        updates["aliases"] = json.dumps(updates["aliases"], ensure_ascii=False)
+        return _get_person(person_id)
 
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     values = list(updates.values()) + [person_id]
     conn = _conn()
     conn.execute(
-        f"UPDATE persons SET {set_clause} WHERE person_id = ?", values
+        f"UPDATE person_interest SET {set_clause} WHERE person_id = ?", values
     )
     conn.commit()
     conn.close()
-    return get_person(person_id)
+    return _get_person(person_id)
 
 
-def increment_mention(person_id: str):
+def _increment_mention(person_id: str):
     conn = _conn()
     conn.execute(
-        """UPDATE persons
+        """UPDATE person_interest
            SET mention_count = mention_count + 1,
                last_mentioned = datetime('now')
            WHERE person_id = ?""",
@@ -123,10 +115,10 @@ def increment_mention(person_id: str):
     conn.close()
 
 
-def list_active_persons() -> list[dict]:
+def _list_active_persons() -> list[dict]:
     conn = _conn()
     rows = conn.execute(
-        "SELECT * FROM persons WHERE status != 'forgotten' ORDER BY interest_score DESC"
+        "SELECT * FROM person_interest WHERE status != 'forgotten' ORDER BY interest_score DESC"
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -141,7 +133,7 @@ def add_delta(person_id: str, delta: float,
     """Apply an interest delta per turn. Enforces per-session caps and score
     boundaries. Updates interest_score immediately; accumulates to
     session_delta for auditing."""
-    person = get_person(person_id)
+    person = _get_person(person_id)
     if not person:
         return None
 
@@ -176,7 +168,7 @@ def add_delta(person_id: str, delta: float,
 
     conn = _conn()
     conn.execute(
-        """UPDATE persons
+        """UPDATE person_interest
            SET interest_score = ?,
                session_delta = session_delta + ?,
                last_mentioned = datetime('now')
@@ -194,7 +186,7 @@ def _recalc_status(person_id: str, score: float):
     """Update status triggered by score crossing thresholds."""
     conn = _conn()
     row = conn.execute(
-        "SELECT status FROM persons WHERE person_id = ?", (person_id,)
+        "SELECT status FROM person_interest WHERE person_id = ?", (person_id,)
     ).fetchone()
     if not row or row["status"] == "forgotten":
         conn.close()
@@ -203,12 +195,12 @@ def _recalc_status(person_id: str, score: float):
     current = row["status"]
     if score < 0 and current != "disliked":
         conn.execute(
-            "UPDATE persons SET status = 'disliked' WHERE person_id = ?",
+            "UPDATE person_interest SET status = 'disliked' WHERE person_id = ?",
             (person_id,),
         )
     elif score >= 0 and current == "disliked":
         conn.execute(
-            "UPDATE persons SET status = 'active' WHERE person_id = ?",
+            "UPDATE person_interest SET status = 'active' WHERE person_id = ?",
             (person_id,),
         )
     conn.commit()
@@ -219,7 +211,7 @@ def commit_session_close():
     """Reset all session_delta values to 0. Called at session end.
     interest_scores have already been updated turn-by-turn."""
     conn = _conn()
-    conn.execute("UPDATE persons SET session_delta = 0.0 WHERE session_delta != 0.0")
+    conn.execute("UPDATE person_interest SET session_delta = 0.0 WHERE session_delta != 0.0")
     conn.commit()
     conn.close()
 
@@ -232,6 +224,37 @@ def run_decay():
     script = sql.read_text(encoding="utf-8")
     conn = _conn()
     conn.executescript(script)
+    conn.commit()
+    conn.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Private — user profiles
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_user_profile(user_id: str) -> dict | None:
+    conn = _conn()
+    row = conn.execute(
+        "SELECT data FROM user_profiles WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return json.loads(row["data"])
+    return None
+
+
+def _set_user_profile(user_id: str, data: dict):
+    from datetime import datetime, timezone, timedelta
+    COL = timezone(timedelta(hours=-5))
+    now = datetime.now(COL).isoformat()
+    conn = _conn()
+    conn.execute(
+        """INSERT INTO user_profiles (user_id, data, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+               data = excluded.data, updated_at = excluded.updated_at""",
+        (user_id, json.dumps(data, ensure_ascii=False), now),
+    )
     conn.commit()
     conn.close()
 
@@ -328,9 +351,8 @@ def infer_family_relations() -> list[dict]:
     ).fetchall()
     conn.close()
 
-    # Build lookup: person_id -> {role: True}
-    is_parent_of_jose = set()  # person_ids that are parents of Jose
-    is_sibling_of_jose = set()  # person_ids that are siblings of Jose
+    is_parent_of_jose = set()
+    is_sibling_of_jose = set()
 
     for r in families:
         fid, tid, desc = r["from_person_id"], r["to_person_id"], r["description"]
@@ -345,7 +367,6 @@ def infer_family_relations() -> list[dict]:
             if "herman" in desc.lower():
                 is_sibling_of_jose.add(tid)
 
-    # Rule 1: parents of Jose → romantic between them
     parent_list = list(is_parent_of_jose)
     if len(parent_list) >= 2:
         for i in range(len(parent_list)):
@@ -357,7 +378,6 @@ def infer_family_relations() -> list[dict]:
                 if r:
                     new_rows.append(r)
 
-    # Rules 2-4: parents ↔ siblings
     for parent in is_parent_of_jose:
         for sibling in is_sibling_of_jose:
             r = _infer_if_missing(
@@ -367,7 +387,6 @@ def infer_family_relations() -> list[dict]:
             if r:
                 new_rows.append(r)
 
-    # Rule: siblings are siblings of each other
     sibling_list = list(is_sibling_of_jose)
     if len(sibling_list) >= 2:
         for i in range(len(sibling_list)):
