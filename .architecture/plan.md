@@ -1,0 +1,138 @@
+# LUMI VPS — State & Plan
+
+**Date:** May 11, 2026
+**Active phase:** 4 (Mem0 + semantic memory)
+**Next target:** Complete Phase 4
+
+---
+
+## Current Architecture
+
+```
+src/
+├── agent/               # Orchestration
+│   ├── core.py          # cycle() unified orchestrator
+│   ├── handlers.py      # message type handlers + explicit save processing
+│   ├── context.py       # prompt builder (lumi_soul.md + dynamic suffix)
+│   ├── router.py        # keyword classifier
+│   └── tools.py         # tool registry + dispatch
+├── llm/                 # LLM layer
+│   ├── factory.py       # model fallback (Qwen→Step→Nemotron)
+│   ├── base.py          # BaseLLM ABC
+│   ├── qwen3_5_35b.py
+│   ├── step_3_5_flash.py
+│   └── nemotron_super_120b.py
+├── memory/              # Memory layer
+│   ├── facade.py        # single import point for agent
+│   ├── mem0_client.py   # Mem0 REST API (add, search, explicit save)
+│   ├── sqlite_memory.py # conversation history + session tables
+│   ├── core_state.py    # person_interest, user_profiles, relations
+│   ├── session_tracker.py
+│   └── summary.py       # LLM-powered session summaries
+├── bridge/              # WebSocket VPS↔PC
+├── state/               # internal_state (mood/energy/trust)
+├── tools/               # BaseTool + BraveSearch
+├── scheduler/           # APScheduler (beat + idle check)
+├── utils/               # shared logger (COL timezone)
+├── personality/         # lumi_soul.md (58KB personality)
+├── skills/              # policy documents (read-only)
+├── schemas/             # SQLite databases
+│   ├── logs.db          # history + session_turns + session_summaries
+│   └── core_state.db    # person_interest, user_profiles, relations, lumi_state
+└── main.py              # FastAPI entrypoint
+```
+
+---
+
+## What Works (✅ Tested)
+
+| System | Notes |
+|--------|-------|
+| **chat endpoint** | classify → handlers → context → tool check → LLM → stream |
+| **explicit save** | "guarda esto" → LLM preprocessing → Mem0 with metadata.category |
+| **web search tool** | Brave Search via keyword router + tool check |
+| **tool check optimization** | Lightweight 200-token check replaces 10k-token full-context call — 65% savings |
+| **session summaries** | Every 5 turns + 30min idle → LLM-generated, stored in SQLite |
+| **scheduler heartbeat** | 5-min beat + 10-min idle session check |
+| **auto-registration** | New user_id → person_interest row created on first chat |
+| **user profiles** | JSON in SQLite (user_profiles), injected into context |
+| **personality** | lumi_soul.md (58KB) loaded as system prefix |
+| **internal state** | Numeric mood model (mood_policy.md compliant) — rewritten but NOT tested |
+| **interest deltas + decay** | add_delta() with caps, run_decay() — implemented but NOT tested |
+| **relations + family inference** | add_relation(), infer_family_relations() — implemented but NOT tested |
+| **per-turn fact extraction** | add_memory() called after each normal chat turn |
+
+---
+
+## Phase 4 — Remaining Items
+
+### 🔴 Core
+
+| # | Item | What | Effort |
+|---|------|------|--------|
+| 1 | **Memory search pipeline** | 5-step pipeline from `memory_search.md`: entity resolution via `person_interest`, relation lookup via `relations`, semantic search with dedup, token-budgeted injection into context | Medium |
+| 2 | ~~Per-turn fact extraction~~ | **DONE** — `add_memory()` called after each normal chat turn | — |
+
+### 🟠 Validate (code exists, never tested)
+
+| # | Item | How |
+|---|------|-----|
+| 3 | **Relations + family inference** | Exercise `add_relation()`, `infer_family_relations()` with real data |
+| 4 | **Internal state** | Exercise `apply_deltas()`, `morning_reset()`, `check_emotional_honesty_mode()` |
+| 5 | **Interest deltas + decay** | Verify `add_delta()` with caps, `run_decay()` runs correctly |
+
+### 🟠 Wire up (code exists, not connected)
+
+| # | Item | What |
+|---|------|------|
+| 6 | **Attitude policy injection** | Inject `attitude_policy.md` rules (score-driven posture, curiosity gate, reality filter) into system prompt |
+| 7 | **Decay to scheduler** | Add `weekly_decay` job to APScheduler calling `run_decay()` |
+| 8 | **Emotional honesty to context** | Wire `check_emotional_honesty_mode()` into `_build_dynamic_suffix()` |
+
+### 🟡 Optional / Deferred
+
+| # | Item |
+|---|------|
+| 9 | User profile periodic refresh from Mem0 facts |
+| 10 | Reflection pipeline (11 stages from `reflection_policy.md`) |
+| 11 | Passive observation (`/v1/observe` → Mem0) |
+| 12 | Skill evolution (auto-proposals, disabled 90 days) |
+
+---
+
+## Implementation Order
+
+```
+Session 1: Memory search pipeline (#1)
+           → Update context.py with entity resolution, relation lookup, dedup, token budget
+
+Session 2: Validate (#3-5)
+           → Test relations, internal state, interest deltas with real data
+
+Session 3: Wire up (#6-8)
+           → Attitude policy injection, decay to scheduler, emotional honesty to context
+
+Session 4: Manual update
+           → Fix paths, add new files, update Phase 4 status in LUMI-Manual.md
+```
+
+After these 4 sessions, Phase 4 is complete. The manual's feature catalog items #1 (Perfil Viviente), #7 (Arquitectura Modular), #8 (Personalidad Dinámica), #9 (Memoria de Relaciones) are fully implemented.
+
+---
+
+## Quick Reference — Key Files
+
+| File | Does |
+|------|------|
+| `src/agent/core.py` | Orchestrator — classify → dispatch → tool check → LLM → stream → save → extract |
+| `src/agent/handlers.py` | Message type handlers + explicit save processing + save verification |
+| `src/agent/context.py` | Builds system prompt (soul + state + summaries + memories + profile + interest) |
+| `src/agent/router.py` | Keyword classifier (chat/web_search/long_task/explicit_save) |
+| `src/memory/facade.py` | Single import point for all memory operations |
+| `src/memory/mem0_client.py` | Mem0 REST API — add_memory, search_relevant, save_explicit |
+| `src/memory/sqlite_memory.py` | SQLite — history, session_turns, session_summaries |
+| `src/memory/core_state.py` | SQLite — person_interest, user_profiles, relations, interest deltas |
+| `src/memory/summary.py` | LLM session summary generation |
+| `src/memory/session_tracker.py` | Per-session turn counting |
+| `src/llm/factory.py` | Model fallback orchestration (chat + chat_stream) |
+| `src/scheduler/heartbeat.py` | APScheduler — 5-min beat + 10-min idle check |

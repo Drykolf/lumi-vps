@@ -35,6 +35,7 @@ from src.memory.core_state import (
     get_relations,
     add_relation,
     infer_family_relations,
+    find_user_id_by_name,
 )
 from src.memory.session_tracker import record_turn, get_session_users, reset_turns, get_stale_sessions
 from src.memory.summary import generate_summary, get_recent_summaries
@@ -62,6 +63,7 @@ __all__ = [
     "get_relations",
     "add_relation",
     "infer_family_relations",
+    "find_user_id_by_name",
     "record_turn",
     "get_session_users",
     "reset_turns",

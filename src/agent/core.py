@@ -9,7 +9,7 @@ from src.agent import router, tools
 from src.agent.handlers import handle_long_task, handle_explicit_save, handle_web_search
 from src.llm.factory import chat, chat_stream
 from src.agent.context import build_messages
-from src.memory.facade import save_turn, init_db, init_core_db, record_turn, generate_summary, reset_turns, get_session_turns
+from src.memory.facade import save_turn, init_db, init_core_db, record_turn, generate_summary, reset_turns, get_session_turns, add_memory
 from src.state.internal_state import init_state_table
 from src.utils.logger import get_logger
 
@@ -35,6 +35,16 @@ def _maybe_summarize(sid: str, user_id: str):
     turn_count = record_turn(sid, user_id)
     if turn_count % 5 == 0:
         asyncio.create_task(_run_summary(sid))
+
+
+async def _extract_facts(user_id: str, user_msg: str, lumi_reply: str):
+    """Fire-and-forget: send the turn to Mem0 for fact extraction."""
+    await add_memory(
+        [
+            {"role": "user", "content": user_msg},
+        ],
+        user_id,
+    )
 
 
 def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str):
@@ -186,6 +196,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
         yield chunk
 
     _finalize_turn(user_id, message, full_reply, sid)
+    #asyncio.create_task(_extract_facts(user_id, message, full_reply))
 
 
 async def run_stream(user_id: str, message: str, metadata: dict):

@@ -259,6 +259,18 @@ def _set_user_profile(user_id: str, data: dict):
     conn.close()
 
 
+def find_user_id_by_name(name: str) -> str | None:
+    """Search user_profiles JSON for matching name or alias."""
+    conn = _conn()
+    rows = conn.execute("SELECT user_id, data FROM user_profiles").fetchall()
+    conn.close()
+    for row in rows:
+        data = json.loads(row["data"])
+        if data.get("name") == name or name in data.get("aliases", []):
+            return row["user_id"]
+    return None
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Relations (relation_policy.md)
 # ═══════════════════════════════════════════════════════════════════════════════
