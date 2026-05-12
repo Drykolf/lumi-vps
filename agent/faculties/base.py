@@ -32,3 +32,27 @@ class BaseTool(ABC):
                 "parameters": self.parameters,
             }
         }
+
+
+"""TODO
+├── registry.py
+├── dispatcher.py
+La separación correcta sería:
+
+cognition/intention.py
+
+decide:
+
+necesito buscar
+necesito guardar
+necesito recordar
+necesito usar una capacidad externa
+
+y:
+
+faculties/dispatcher.py
+
+ejecuta.
+
+Eso es importante: la intención pertenece a la cognición; la ejecución pertenece a las facultades.
+"""

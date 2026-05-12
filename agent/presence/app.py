@@ -6,11 +6,11 @@ import os
 import httpx
 import json
 from dotenv import load_dotenv
-from src.agent.core import run, run_stream
-from src.bridge.bridge_server import on_connect, connected_users, start_heartbeat
-from src.memory.facade import get_user_information, set_user_information
-from src.utils.logger import get_logger, configure_root
-import src.scheduler.heartbeat as scheduler
+from agent.cognition.stream import run, run_stream
+from agent.perception.websocket import on_connect, connected_users, start_heartbeat
+from agent.memory.recall import get_user_information, set_user_information
+from agent.substrate.logger import get_logger, configure_root
+import agent.rhythm.heartbeat as scheduler
 
 load_dotenv()
 
@@ -117,12 +117,12 @@ async def startup():
 @app.get("/v1/tools")
 async def get_tools(x_api_key: str = Header(...)):
     verify_key(x_api_key)
-    from src.agent import tools
+    from agent.cognition import intention
     connected = connected_users()
     result = {}
-    for name in tools._local_tools:
+    for name in intention._local_tools:
         result[name] = {"location": "vps", "connected": True}
-    for name in tools._remote_tools:
+    for name in intention._remote_tools:
         if name not in result:  # no duplicar si está en ambos
             result[name] = {"location": "bridge", "connected": bool(connected)}
     return {"tools": result, "bridge_connected": connected}

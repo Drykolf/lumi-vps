@@ -2,15 +2,15 @@ import json
 import re
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.memory.facade import get_history, search_relevant, get_user_information, get_recent_summaries, create_person_interest, get_session_turns, set_user_information
-from src.llm.factory import chat
-from src.state.internal_state import get_state, state_to_text
-from src.utils.logger import get_logger
+from agent.memory.recall import get_history, search_relevant, get_user_information, get_recent_summaries, create_person_interest, get_session_turns, set_user_information
+from agent.expression.synapses import chat
+from agent.affect.state import get_state, state_to_text
+from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.context")
 
 COL = timezone(timedelta(hours=-5))
-SOUL_PATH = Path(__file__).parent.parent / "personality" / "lumi_soul.md"
+SOUL_PATH = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
 
 _cached_prefix = None
 

@@ -1,6 +1,6 @@
 """
 SQLite operations — conversation history, session tracking, summaries.
-Stored in schemas/logs.db.
+Stored in data/logs.db (repo root).
 """
 import sqlite3
 import json
@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 COL = timezone(timedelta(hours=-5))
-DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
 
 
 def _conn():

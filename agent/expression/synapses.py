@@ -5,9 +5,9 @@ loop.py importa este módulo directamente.
 import asyncio
 import logging
 from openai import RateLimitError
-from src.llm.qwen3_5_35b import Qwen3_5_35B
-from src.llm.step_3_5_flash import Step3_5Flash
-from src.llm.nemotron_super_120b import NemotronSuper120B
+from agent.expression.providers.qwen3_5_35b import Qwen3_5_35B
+from agent.expression.providers.step_3_5_flash import Step3_5Flash
+from agent.expression.providers.nemotron_super_120b import NemotronSuper120B
 
 logger = logging.getLogger("llm")
 

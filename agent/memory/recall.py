@@ -9,14 +9,14 @@ Implementaciones:
   src/memory/session_tracker.py  — contador de turnos por sesion
   src/memory/summary.py          — generacion LLM de resumenes de sesion
 """
-from src.memory.sqlite_memory import (
+from agent.memory.episodic import (
     init_db,
     save_turn,
     get_history,
     get_session_turns,
     mark_summarized,
 )
-from src.memory.mem0_client import (
+from agent.memory.semantic import (
     search_relevant,
     add_memory,
     save_explicit,
@@ -24,7 +24,7 @@ from src.memory.mem0_client import (
 
 # Alias: loop.py expects add_memory_explicit per memory_policy.md naming
 add_memory_explicit = save_explicit
-from src.memory.core_state import (
+from agent.memory.social import (
     init_core_db,
     get_user_information,
     set_user_information,
@@ -37,8 +37,8 @@ from src.memory.core_state import (
     infer_family_relations,
     find_user_id_by_name,
 )
-from src.memory.session_tracker import record_turn, get_session_users, reset_turns, get_stale_sessions
-from src.memory.summary import generate_summary, get_recent_summaries
+from agent.memory.session import record_turn, get_session_users, reset_turns, get_stale_sessions
+from agent.memory.consolidation import generate_summary, get_recent_summaries
 
 # Backward compat alias
 get_profile = get_user_information

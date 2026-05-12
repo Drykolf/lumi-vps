@@ -9,7 +9,7 @@ from datetime import datetime, timezone, timedelta
 
 COL = timezone(timedelta(hours=-5))
 
-DB_PATH = Path(__file__).parent.parent / "schemas" / "core_state.db"
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "core_state.db"
 
 DEFAULT_STATE = {
     "mood_valence": 0.3,
@@ -69,7 +69,7 @@ def _write_state(state: dict):
 
 def init_state_table():
     """Ensure core_state.db and lumi_state row exist. Must run once at startup."""
-    from src.memory.core_state import init_core_db
+    from agent.memory.social import init_core_db
 
     init_core_db()
     existing = _read_state()
@@ -164,3 +164,17 @@ def check_emotional_honesty_mode() -> bool:
             _write_state(state)
 
     return state["emotional_honesty_mode"]
+
+"""TODO
+affect/state.py       # estado actual
+affect/dynamics.py    # cómo cambia
+affect/readings.py    # cómo se expone o interpreta
+
+readings.py me parece mejor, porque suena a lecturas internas:
+mood
+energy
+trust
+patience
+irritation
+fatigue
+"""

@@ -9,37 +9,41 @@
 ## Current Architecture
 
 ```
-src/
-├── agent/               # Orchestration
-│   ├── core.py          # cycle() unified orchestrator
-│   ├── handlers.py      # message type handlers + explicit save processing
-│   ├── context.py       # prompt builder (lumi_soul.md + dynamic suffix)
-│   ├── router.py        # keyword classifier
-│   └── tools.py         # tool registry + dispatch
-├── llm/                 # LLM layer
-│   ├── factory.py       # model fallback (Qwen→Step→Nemotron)
-│   ├── base.py          # BaseLLM ABC
+agent/
+├── presence/             # FastAPI entrypoint
+│   └── app.py            # main FastAPI app (root_path="/lumi")
+├── perception/           # External world sensing
+│   └── websocket.py      # WebSocket bridge VPS↔PC
+├── cognition/            # Orchestration
+│   ├── stream.py          # cycle() unified orchestrator
+│   ├── stimulus.py        # message type handlers + explicit save processing
+│   ├── working_memory.py  # prompt builder (lumi_soul.md + dynamic suffix)
+│   ├── attention.py       # keyword classifier
+│   └── intention.py       # tool registry + dispatch
+├── llm/                  # LLM layer
+│   ├── factory.py        # model fallback (Qwen→Step→Nemotron)
+│   ├── base.py           # BaseLLM ABC
 │   ├── qwen3_5_35b.py
 │   ├── step_3_5_flash.py
 │   └── nemotron_super_120b.py
-├── memory/              # Memory layer
-│   ├── facade.py        # single import point for agent
-│   ├── mem0_client.py   # Mem0 REST API (add, search, explicit save)
-│   ├── sqlite_memory.py # conversation history + session tables
-│   ├── core_state.py    # person_interest, user_profiles, relations
-│   ├── session_tracker.py
-│   └── summary.py       # LLM-powered session summaries
-├── bridge/              # WebSocket VPS↔PC
-├── state/               # internal_state (mood/energy/trust)
-├── tools/               # BaseTool + BraveSearch
-├── scheduler/           # APScheduler (beat + idle check)
-├── utils/               # shared logger (COL timezone)
-├── personality/         # lumi_soul.md (58KB personality)
-├── skills/              # policy documents (read-only)
-├── schemas/             # SQLite databases
-│   ├── logs.db          # history + session_turns + session_summaries
-│   └── core_state.db    # person_interest, user_profiles, relations, lumi_state
-└── main.py              # FastAPI entrypoint
+├── memory/               # Memory layer
+│   ├── recall.py          # single import point for agent (facade)
+│   ├── semantic.py        # Mem0 REST API (add, search, explicit save)
+│   ├── episodic.py        # conversation history + session tables
+│   ├── social.py          # person_interest, user_profiles, relations
+│   ├── session.py         # per-session turn counting
+│   └── consolidation.py   # LLM-powered session summaries
+├── bridge/               # (legacy bridge package, superseded by perception/)
+├── affect/              # internal state (mood/energy/trust)
+│   └── state.py
+├── faculties/           # BaseTool + BraveSearch
+├── rhythm/              # APScheduler (beat + idle check)
+├── utils/                # shared logger (COL timezone)
+├── identity/            # lumi_soul.md (58KB personality)
+├── skills/               # policy documents (read-only)
+└── schemas/              # SQLite databases
+    ├── logs.db           # history + session_turns + session_summaries
+    └── core_state.db     # person_interest, user_profiles, relations, lumi_state
 ```
 
 ---
@@ -124,15 +128,15 @@ After these 4 sessions, Phase 4 is complete. The manual's feature catalog items 
 
 | File | Does |
 |------|------|
-| `src/agent/core.py` | Orchestrator — classify → dispatch → tool check → LLM → stream → save → extract |
-| `src/agent/handlers.py` | Message type handlers + explicit save processing + save verification |
-| `src/agent/context.py` | Builds system prompt (soul + state + summaries + memories + profile + interest) |
-| `src/agent/router.py` | Keyword classifier (chat/web_search/long_task/explicit_save) |
-| `src/memory/facade.py` | Single import point for all memory operations |
-| `src/memory/mem0_client.py` | Mem0 REST API — add_memory, search_relevant, save_explicit |
-| `src/memory/sqlite_memory.py` | SQLite — history, session_turns, session_summaries |
-| `src/memory/core_state.py` | SQLite — person_interest, user_profiles, relations, interest deltas |
-| `src/memory/summary.py` | LLM session summary generation |
-| `src/memory/session_tracker.py` | Per-session turn counting |
-| `src/llm/factory.py` | Model fallback orchestration (chat + chat_stream) |
-| `src/scheduler/heartbeat.py` | APScheduler — 5-min beat + 10-min idle check |
+| `agent/cognition/stream.py` | Orchestrator — classify → dispatch → tool check → LLM → stream → save → extract |
+| `agent/cognition/stimulus.py` | Message type handlers + explicit save processing + save verification |
+| `agent/cognition/working_memory.py` | Builds system prompt (soul + state + summaries + memories + profile + interest) |
+| `agent/cognition/attention.py` | Keyword classifier (chat/web_search/long_task/explicit_save) |
+| `agent/memory/recall.py` | Single import point for all memory operations |
+| `agent/memory/semantic.py` | Mem0 REST API — add_memory, search_relevant, save_explicit |
+| `agent/memory/episodic.py` | SQLite — history, session_turns, session_summaries |
+| `agent/memory/social.py` | SQLite — person_interest, user_profiles, relations, interest deltas |
+| `agent/memory/consolidation.py` | LLM session summary generation |
+| `agent/memory/session.py` | Per-session turn counting |
+| `agent/llm/factory.py` | Model fallback orchestration (chat + chat_stream) |
+| `agent/rhythm/heartbeat.py` | APScheduler — 5-min beat + 10-min idle check |

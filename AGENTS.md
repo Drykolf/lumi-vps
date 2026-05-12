@@ -9,17 +9,17 @@
 ## Project structure (two separate apps)
 
 ```
-src/             → Main FastAPI app "LUMI VPS" (v0.4.0)
+agent/           → Main FastAPI app "LUMI VPS" (v0.4.0)
 mem0_server/     → Separate Mem0 REST API (Dockerized, port 8100)
 ```
 
-- `src/` has **no `__init__.py`** — imports are absolute rooted from working dir: `from src.agent import router`
-- Entrypoint: `src/main.py` → FastAPI with `root_path="/lumi"`
+- `agent/` has **no `__init__.py`** — imports are absolute rooted from working dir: `from agent.cognition import attention`
+- Entrypoint: `agent/presence/app.py` → FastAPI with `root_path="/lumi"`
 - Mem0 entrypoint: `mem0_server/main.py` → FastAPI on container:8000, mapped to host:8100
 
 ## Running
 
-- **No defined run command for the main app.** The Mem0 Dockerfile shows the pattern: `uvicorn main:app --host 0.0.0.0 --port 8000`. Presumably run from `src/` directory.
+- **No defined run command for the main app.** The Mem0 Dockerfile shows the pattern: `uvicorn main:app --host 0.0.0.0 --port 8000`. Presumably run from `agent/` directory.
 - **Neo4j is optional** — behind `--profile graph` in docker-compose. Only postgres + mem0 are required.
 - Start services: `docker compose up` (add `--profile graph` for neo4j)
 
@@ -62,9 +62,9 @@ All via DeepInfra's OpenAI-compatible API (`DEEPINFRA_API_KEY`, base URL `https:
 - **Step**: uses `{"reasoning_effort": "none"}` — does NOT accept `chat_template_kwargs`
 - **Nemotron**: no `extra_body` at all
 
-The LLM factory in `src/agent/llm.py` delegates to individual model classes. Each model class has its own `_kwargs` builder. When adding a new model, `extra_body` must match what the provider expects.
+The LLM factory in `agent/llm/factory.py` delegates to individual model classes. Each model class has its own `_kwargs` builder. When adding a new model, `extra_body` must match what the provider expects.
 
-## Agent loop (`src/agent/loop.py`)
+## Agent loop (`agent/cognition/stream.py`)
 
 ```
 classify (keyword router) → build context → LLM + tools loop → stream → save
@@ -74,11 +74,11 @@ classify (keyword router) → build context → LLM + tools loop → stream → 
 - `run_stream` is what the `/v1/chat` endpoint uses
 - Max 10 tool-calling iterations per turn
 
-### Router (`src/agent/router.py`)
+### Router (`agent/cognition/attention.py`)
 
 Keyword-based pre-classifier (no embeddings). Returns: `chat`, `web_search`, `long_task`, `explicit_save`. Blocklist takes priority over web_search triggers.
 
-## Tools (`src/agent/tools.py`)
+## Tools (`agent/cognition/intention.py`)
 
 Two kinds:
 - **Local** (VPS): registered via `register_tool(BaseTool)` — Brave Search is the only local tool
@@ -90,23 +90,23 @@ Tool schemas: local tools auto-generate from function `__doc__`, remote tools pr
 
 | Store | Backend | Purpose |
 |-------|---------|---------|
-| Conversation history | SQLite (`src/schemas/logs.db`) | Turn-by-turn, last N used in context |
+| Conversation history | SQLite (`data/logs.db`) | Turn-by-turn, last N used in context |
 | Semantic memory | Mem0 + pgvector (port 8100) | Facts, people, persistent knowledge |
-| Internal state | SQLite (`src/schemas/core_state.db`) | Lumi's mood, energy, focus |
+| Internal state | SQLite (`data/core_state.db`) | Lumi's mood, energy, focus |
 
-- `src/agent/memory.py` is a **facade** — loop.py and context.py import only from there. Real impl is in `src/memory/mem0_client.py`.
-- `src/memory/sqlite_memory.py` exists but appears superseded by `mem0_client.py`.
+- `agent/memory/recall.py` is a **facade** — stream.py and working_memory.py import only from there. Real impl is in `agent/memory/semantic.py`.
+- `agent/memory/episodic.py` exists but appears superseded by `semantic.py`.
 - Conversation history is NOT stored in Mem0 (by design — it's sequential, not semantic).
 
 ## Personality
 
-- SillyTavern v3 character card at `src/personality/lumi_card.json`
-- Cached as system prompt prefix on first load (`_build_cached_prefix()` in `src/agent/context.py`)
+- SillyTavern v3 character card at `agent/identity/lumi_card.json`
+- Cached as system prompt prefix on first load (`_build_cached_prefix()` in `agent/cognition/working_memory.py`)
 - Fallback (if card missing): hardcoded brief Spanish prompt
 
-## Skill/policy docs
+## Skill/policy docs (identity/principles/)
 
-Markdown files in `src/skills/` define Lumi's behavioral rules. They are **read-only policy documents**, not executable code. The SQL in `src/skills/_impl/` defines schema for skill proposals and interest decay.
+Markdown files in `agent/identity/principles/` define Lumi's behavioral rules. They are **read-only policy documents**, not executable code. The SQL in `agent/subconscious/migrations/` defines schema for skill proposals and interest decay.
 
 ## Security
 

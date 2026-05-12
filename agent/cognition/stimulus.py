@@ -5,11 +5,11 @@ Each handler takes a classified message and returns the reply.
 import json
 import re
 
-from src.agent import router
-from src.llm.factory import chat
-from src.agent.context import build_messages
-from src.memory.facade import add_memory_explicit
-from src.utils.logger import get_logger
+from agent.cognition import attention
+from agent.expression.synapses import chat
+from agent.cognition.working_memory import build_messages
+from agent.memory.recall import add_memory_explicit
+from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.handlers")
 
@@ -87,7 +87,7 @@ async def handle_long_task(user_id: str, message: str, sid: str) -> str:
 
 
 async def handle_explicit_save(user_id: str, message: str, sid: str, metadata: dict) -> str:
-    category = router.detect_category(message)
+    category = attention.detect_category(message)
     logger.info(f"[explicit_save] category={category} | user_id={user_id}")
     processed = await process_explicit_memory(message)
     result = await add_memory_explicit(processed["memory"], user_id, processed.get("category", category))

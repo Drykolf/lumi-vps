@@ -3,10 +3,10 @@ import logging
 from datetime import timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from src.utils.logger import get_logger
+from agent.substrate.logger import get_logger
 
 COL = timezone(timedelta(hours=-5))
-logger = get_logger("scheduler.heartbeat")
+logger = get_logger("rhythm.heartbeat")
 
 # Suppress APScheduler's own job lifecycle logs
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
@@ -23,8 +23,8 @@ async def beat():
 
 @scheduler.scheduled_job("interval", minutes=10)
 async def idle_session_check():
-    from src.memory.session_tracker import get_stale_sessions, reset_turns
-    from src.memory.summary import generate_summary
+    from agent.memory.session import get_stale_sessions, reset_turns
+    from agent.memory.consolidation import generate_summary
     logger.info("idle sessions check")
     stale = get_stale_sessions(inactive_minutes=30)
     if not stale:
@@ -57,4 +57,11 @@ async def idle_session_check():
 
 def start():
     scheduler.start()
-    logger.info("scheduler started | beat=5min | tz=UTC-5")
+    logger.info("rhythm started | tz=UTC-5")
+
+
+"""TODO
+heartbeat.py	Perfecto para beat operativo.
+quiescence.py	Muy bueno para idle check / reposo / consolidación nocturna.
+cadence.py	Muy bueno para intervalos, timers y configuración temporal.
+"""

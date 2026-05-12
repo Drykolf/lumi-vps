@@ -1,7 +1,7 @@
 import os
 import logging
 from openai import AsyncOpenAI
-from src.llm.base import BaseLLM
+from agent.expression.providers.base import BaseLLM
 
 logger = logging.getLogger("llm.nemotron_super_120b")
 

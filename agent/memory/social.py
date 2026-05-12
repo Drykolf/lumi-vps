@@ -15,8 +15,8 @@ import sqlite3
 import json
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent.parent / "schemas" / "core_state.db"
-SCHEMA_PATH = Path(__file__).parent.parent / "skills" / "_impl" / "00_schema_sqlite.sql"
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "core_state.db"
+SCHEMA_PATH = Path(__file__).parent.parent / "subconscious" / "migrations" / "00_schema_sqlite.sql"
 
 
 def _conn():
@@ -220,7 +220,7 @@ def run_decay():
     """Apply decay to interest scores per interest_policy.md.
     Runs at session close and weekly heartbeat.
     Non-Jose only, score >= 0, last mentioned 28+ days ago."""
-    sql = (Path(__file__).parent.parent / "skills" / "_impl" / "interest_decay.sql")
+    sql = (Path(__file__).parent.parent / "subconscious" / "migrations" / "interest_decay.sql")
     script = sql.read_text(encoding="utf-8")
     conn = _conn()
     conn.executescript(script)

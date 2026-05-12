@@ -7,7 +7,7 @@ SQLite operations (historial, sesiones, resumenes) estan en sqlite_memory.py.
 import httpx
 import os
 
-from src.utils.logger import get_logger
+from agent.substrate.logger import get_logger
 
 logger = get_logger("mem0_client")
 
@@ -65,7 +65,7 @@ async def search_relevant(user_id: str, query: str, limit: int = 5) -> list[str]
             resp.raise_for_status()
             results = resp.json().get("results", [])
             logger.info(f"search_relevant: query='{query[:80]}' → {len(results)} results{', scores: '+str([round(r.get('score',0),3) for r in results]) if results else ''}")
-            logger.info(f"search_relevant: results={results}")
+            #logger.info(f"search_relevant: results={results}")
             return [r["memory"] for r in results if r.get("memory")]
     except Exception as e:
         logger.warning(f"mem0 search_relevant failed: {e}")

@@ -5,13 +5,13 @@ import asyncio
 import json
 import re
 
-from src.agent import router, tools
-from src.agent.handlers import handle_long_task, handle_explicit_save, handle_web_search
-from src.llm.factory import chat, chat_stream
-from src.agent.context import build_messages
-from src.memory.facade import save_turn, init_db, init_core_db, record_turn, generate_summary, reset_turns, get_session_turns, add_memory
-from src.state.internal_state import init_state_table
-from src.utils.logger import get_logger
+from agent.cognition import attention, intention
+from agent.cognition.stimulus import handle_long_task, handle_explicit_save, handle_web_search
+from agent.expression.synapses import chat, chat_stream
+from agent.cognition.working_memory import build_messages
+from agent.memory.recall import save_turn, init_db, init_core_db, record_turn, generate_summary, reset_turns, get_session_turns, add_memory
+from agent.affect.state import init_state_table
+from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.core")
 
@@ -57,7 +57,7 @@ def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str):
 
 async def _tool_check(sid: str, message: str) -> str | None:
     """Returns tool name if one is needed, None otherwise. ~500 tokens."""
-    all_schemas = tools.all_schemas()
+    all_schemas = intention.all_schemas()
     if not all_schemas:
         return None
 
@@ -101,7 +101,7 @@ async def _tool_check(sid: str, message: str) -> str | None:
 
 async def _formulate_query(message: str, tool_name: str, sid: str) -> dict | None:
     """Lightweight: generate tool arguments from conversation context. ~200 tokens."""
-    all_schemas = tools.all_schemas()
+    all_schemas = intention.all_schemas()
     schema = next((s for s in all_schemas if s["function"]["name"] == tool_name), None)
     if not schema:
         return None
@@ -155,7 +155,7 @@ async def _formulate_query(message: str, tool_name: str, sid: str) -> dict | Non
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cycle(user_id: str, message: str, metadata: dict):
-    task_type = router.classify(message)
+    task_type = attention.classify(message)
     logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
     sid = _get_sid(metadata)
 
@@ -181,7 +181,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
         args = await _formulate_query(message, tool, sid)
         if args is not None:
             tool_call = [{"function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}]
-            tool_results = await tools.execute(tool_call, user_id)
+            tool_results = await intention.execute(tool_call, user_id)
             messages.append({
                 "role": "assistant",
                 "content": None,

@@ -8,7 +8,7 @@ from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 COL = timezone(timedelta(hours=-5))
-DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
 
 
 def _conn():

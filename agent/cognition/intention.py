@@ -3,9 +3,9 @@ ToolRegistry — soporta tools locales (VPS) y remotas (bridge).
 Fase 3: tools basicas + infraestructura para bridge.
 """
 import logging
-from src.bridge import bridge_server
-from src.tools.brave_search import BraveSearchTool
-from src.tools.base import BaseTool
+from agent.perception import websocket
+from agent.faculties.brave_search import BraveSearchTool
+from agent.faculties.base import BaseTool
 import json as _json
 
 logger = logging.getLogger("tools")
@@ -61,7 +61,7 @@ async def execute(tool_calls: list, user_id: str) -> list[dict]:
             except Exception as e:
                 result = {"error": str(e)}
         elif name in _remote_tools:
-            result = await bridge_server.call_remote(user_id, name, args)
+            result = await websocket.call_remote(user_id, name, args)
         else:
             result = {"error": f"tool '{name}' no registrada"}
 

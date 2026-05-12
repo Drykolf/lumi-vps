@@ -6,9 +6,9 @@ import sqlite3
 import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from src.memory.sqlite_memory import get_session_turns, mark_summarized
-from src.memory.session_tracker import get_session_users
-from src.utils.logger import get_logger
+from agent.memory.episodic import get_session_turns, mark_summarized
+from agent.memory.session import get_session_users
+from agent.substrate.logger import get_logger
 
 logger = get_logger("memory.summary")
 
@@ -50,7 +50,7 @@ async def generate_summary(session_id: str) -> str | None:
     logger.info(f"[summary] generating for session={session_id} | turns={len(turns)} | users={participants}")
 
     try:
-        from src.llm.factory import chat
+        from agent.expression.synapses import chat
         response = await chat(
             messages=[{"role": "user", "content": prompt}],
             max_tokens=200,
@@ -65,7 +65,7 @@ async def generate_summary(session_id: str) -> str | None:
         return None
 
     # Store in session_summaries
-    DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+    DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
     conn = sqlite3.connect(str(DB_PATH))
     conn.execute(
         """INSERT INTO session_summaries (user_ids, summary, created_at)
@@ -84,7 +84,7 @@ async def generate_summary(session_id: str) -> str | None:
 
 def get_recent_summaries(user_id: str, limit: int = 3) -> list[str]:
     """Returns the last N summaries where user_id appears in user_ids."""
-    DB_PATH = Path(__file__).parent.parent / "schemas" / "logs.db"
+    DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
     conn = sqlite3.connect(str(DB_PATH))
     # user_ids is JSON: search for user_id within it
     rows = conn.execute(

@@ -1,7 +1,7 @@
 import os
 import httpx
 import logging
-from src.tools.base import BaseTool
+from agent.faculties.base import BaseTool
 
 logger = logging.getLogger("brave_search")
 
