@@ -1,11 +1,10 @@
 """
 Session summary generator — LLM-powered session summaries every 5 turns.
-Stores in logs.db: session_summaries table.
+Stores in traces.db: session_summaries table.
 """
-import sqlite3
 import json
-from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from agent.subconscious import traces
 from agent.memory.episodic import get_session_turns, mark_summarized
 from agent.memory.session import get_session_users
 from agent.substrate.logger import get_logger
@@ -65,8 +64,7 @@ async def generate_summary(session_id: str) -> str | None:
         return None
 
     # Store in session_summaries
-    DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = traces.get_conn()
     conn.execute(
         """INSERT INTO session_summaries (user_ids, summary, created_at)
            VALUES (?, ?, ?)""",
@@ -84,8 +82,7 @@ async def generate_summary(session_id: str) -> str | None:
 
 def get_recent_summaries(user_id: str, limit: int = 3) -> list[str]:
     """Returns the last N summaries where user_id appears in user_ids."""
-    DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = traces.get_conn()
     # user_ids is JSON: search for user_id within it
     rows = conn.execute(
         """SELECT summary FROM session_summaries

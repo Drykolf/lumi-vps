@@ -10,6 +10,7 @@ from agent.cognition.stream import run, run_stream
 from agent.perception.websocket import on_connect, connected_users, start_heartbeat
 from agent.memory.recall import get_user_information, set_user_information
 from agent.substrate.logger import get_logger, configure_root
+from agent.subconscious import init_databases
 import agent.rhythm.heartbeat as scheduler
 
 load_dotenv()
@@ -111,6 +112,7 @@ async def bridge(ws: WebSocket, user_id: str = Query(...), api_key: str = Query(
 
 @app.on_event("startup")
 async def startup():
+    init_databases()
     await start_heartbeat()
     scheduler.start()
 

@@ -1,5 +1,4 @@
--- LUMI core_state.db
--- Lives on the VPS alongside the conversation history database.
+-- LUMI core.db
 -- This is the SOURCE OF TRUTH for:
 --   * Person interest tracking (score, tone, status)
 --   * User structured profiles (name, location, static data)
@@ -9,7 +8,7 @@
 --
 -- Mem0 (pgvector) stores the SEMANTIC MEMORIES about each person,
 -- linked to this DB via metadata.person_id.
--- Conversation history stays in its own SQLite (logs.db) — separate concern.
+-- Conversation history stays in its own SQLite (traces.db) — separate concern.
 
 PRAGMA foreign_keys = ON;
 
@@ -39,10 +38,6 @@ CREATE TABLE IF NOT EXISTS person_interest (
 CREATE INDEX IF NOT EXISTS idx_person_interest_score          ON person_interest(interest_score DESC);
 CREATE INDEX IF NOT EXISTS idx_person_interest_last_mentioned ON person_interest(last_mentioned);
 CREATE INDEX IF NOT EXISTS idx_person_interest_status         ON person_interest(status);
-
--- Seed Jose
-INSERT OR IGNORE INTO person_interest (person_id, is_jose, interest_score, status)
-VALUES ('jose', 1, 0.70, 'active');
 
 -- ============================================================
 -- USER_PROFILES — structured static data about users
@@ -88,18 +83,70 @@ CREATE INDEX IF NOT EXISTS idx_relations_to   ON relations(to_person_id);
 -- ============================================================
 -- Single-row key/value to keep the schema flexible.
 -- Canonical key: 'internal_state' → JSON blob defined in mood_policy.md
+-- Schema per mood_policy.md §509-588.
+-- Canonical key: 'mood_state' → JSON blob with all mood fields.
 -- Other keys reserved for future use (e.g. 'last_introspection').
 CREATE TABLE IF NOT EXISTS lumi_state (
-    key           TEXT PRIMARY KEY,
-    value         TEXT NOT NULL,                          -- JSON serialized
-    last_updated  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    key TEXT PRIMARY KEY,
+
+    data TEXT NOT NULL CHECK (json_valid(data)),
+
+    -- Generated virtual columns for frequently queried mood fields
+    mood_valence REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.mood_valence')) VIRTUAL,
+
+    mood_energy REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.mood_energy')) VIRTUAL,
+
+    irritation REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.irritation')) VIRTUAL,
+
+    focus_level REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.focus_level')) VIRTUAL,
+
+    presence_need REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.presence_need')) VIRTUAL,
+
+    state_label TEXT
+        GENERATED ALWAYS AS (json_extract(data, '$.state_label')) VIRTUAL,
+
+    emotional_honesty_mode INTEGER
+        GENERATED ALWAYS AS (json_extract(data, '$.emotional_honesty_mode')) VIRTUAL,
+
+    last_interaction_at TEXT
+        GENERATED ALWAYS AS (json_extract(data, '$.last_interaction_at')) VIRTUAL,
+
+    last_meaningful_interaction_at TEXT
+        GENERATED ALWAYS AS (json_extract(data, '$.last_meaningful_interaction_at')) VIRTUAL,
+
+    last_day_reset TEXT
+        GENERATED ALWAYS AS (json_extract(data, '$.last_day_reset')) VIRTUAL,
+
+    last_updated TEXT
+        GENERATED ALWAYS AS (json_extract(data, '$.last_updated')) VIRTUAL,
+
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+    CHECK (key <> ''),
+    CHECK (mood_valence IS NULL OR (mood_valence >= -1.0 AND mood_valence <= 1.0)),
+    CHECK (mood_energy IS NULL OR (mood_energy >= 0.0 AND mood_energy <= 1.0)),
+    CHECK (irritation IS NULL OR (irritation >= 0.0 AND irritation <= 1.0)),
+    CHECK (focus_level IS NULL OR (focus_level >= 0.0 AND focus_level <= 1.0)),
+    CHECK (presence_need IS NULL OR (presence_need >= 0.0 AND presence_need <= 1.0))
 );
 
--- Seed the internal state row with defaults (overridden by mood_policy on first run)
-INSERT OR IGNORE INTO lumi_state (key, value) VALUES (
-  'internal_state',
-  '{"mood_valence":0.3,"mood_energy":0.6,"irritation":0.1,"focus_level":0.7,"trust_jose":0.9,"emotional_honesty_mode":false}'
-);
+CREATE INDEX IF NOT EXISTS idx_lumi_state_label ON lumi_state(state_label);
+CREATE INDEX IF NOT EXISTS idx_lumi_state_last_updated ON lumi_state(last_updated);
+
+CREATE TRIGGER IF NOT EXISTS trg_lumi_state_updated_at
+AFTER UPDATE ON lumi_state
+FOR EACH ROW
+BEGIN
+    UPDATE lumi_state
+    SET updated_at = datetime('now')
+    WHERE key = OLD.key;
+END;
 
 -- ============================================================
 -- SKILL_PROPOSALS — auto-learning candidates awaiting review

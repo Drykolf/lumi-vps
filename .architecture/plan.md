@@ -140,3 +140,28 @@ After these 4 sessions, Phase 4 is complete. The manual's feature catalog items 
 | `agent/memory/session.py` | Per-session turn counting |
 | `agent/llm/factory.py` | Model fallback orchestration (chat + chat_stream) |
 | `agent/rhythm/heartbeat.py` | APScheduler — 5-min beat + 10-min idle check |
+Proposed Plan
+1. Per-turn flow — keep minimal (no changes needed)
+The current cycle() already only does what's necessary: classify → build context → LLM reply → save turn. This stays as-is.
+2. New hourly cron — Mood Policy
+Create a new cron job at minute 0 of every hour that:
+- Checks if interactions happened since last mood update
+- If yes, computes mood deltas from recent turns (warmth signals, frustrations, etc.) and applies them
+- If hour is ~7am (or first run after midnight), also runs morning_reset() regression toward baseline
+- Deletes the existing daily_morning 7am cron entirely
+Files to touch: agent/rhythm/heartbeat.py, possibly a new agent/affect/dynamics.py
+3. Rewrite daily maintenance (3am) — full reflection pipeline
+Wire up the reflection pipeline described in reflection_policy.md. This cron handles everything that was supposed to run at session close:
+Stage	Policy	Implementation
+Memory extraction	memory_policy.md	Batch-extract facts from recent sessions → Mem0
+Apply interest deltas	interest_policy.md	Already tracked in session_delta; commit and reset
+Relation inference	relation_policy.md	Call infer_family_relations()
+Memory tier upgrades	memory_policy.md	Threshold-based upgrade/downgrade
+Interest decay	interest_policy.md	Call run_decay()
+Session summaries	reflection_policy.md	Summarize unprocessed sessions
+User profile	reflection_policy.md	Refresh every 5 sessions
+Skill evolution	skill_evolution.md	Pattern detection → drafts
+Cleanup	reflection_policy.md	Clear Mem0 history, mark sessions closed
+New file to create: agent/subconscious/reflection.py (or agent/memory/reflection.py) — implements the full pipeline orchestration.
+4. Wire weekly cron (Mon 4am)
+Simple — wire run_decay() into the existing weekly_decay stub.

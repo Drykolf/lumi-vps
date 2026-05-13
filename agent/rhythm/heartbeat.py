@@ -25,7 +25,7 @@ async def beat():
 async def idle_session_check():
     from agent.memory.session import get_stale_sessions, reset_turns
     from agent.memory.consolidation import generate_summary
-    logger.info("idle sessions check")
+    #logger.info("idle sessions check")
     stale = get_stale_sessions(inactive_minutes=30)
     if not stale:
         return
@@ -37,20 +37,24 @@ async def idle_session_check():
         logger.info("  session=%s summarized=%s", sid, bool(summary))
 
 
-# ── Future jobs (TODOs) ────────────────────────────────────────────────────────
+# ── Rhythm jobs (cron) ──────────────────────────────────────────────────────────
 
-# TODO: @scheduler.scheduled_job('cron', hour=7, minute=0)
-# async def morning_greeting():
-#     """Greet Jose after waking up. Push via bridge if connected,
-#     queue as pending message otherwise."""
+@scheduler.scheduled_job('cron', hour=7, minute=0)
+async def daily_morning():
+    """Mood regression toward baseline at 7am COT (mood_policy.md)."""
+    logger.info("daily_morning fired")
 
-# TODO: @scheduler.scheduled_job('cron', day_of_week='mon', hour=0, minute=0)
-# async def weekly_decay():
-#     """Run interest score decay for inactive persons (interest_policy.md)."""
 
-# TODO: @scheduler.scheduled_job('cron', hour=7, minute=0)
-# async def morning_reset():
-#     """Daily mood regression toward baseline (mood_policy.md)."""
+@scheduler.scheduled_job('cron', hour=3, minute=0)
+async def daily_maintenance():
+    """Memory tier checks + family inference + cleanup at 3am COT."""
+    logger.info("daily_maintenance fired")
+
+
+@scheduler.scheduled_job('cron', day_of_week='mon', hour=4, minute=0)
+async def weekly_decay():
+    """Interest score decay for inactive persons (interest_policy.md)."""
+    logger.info("weekly_decay fired")
 
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────────

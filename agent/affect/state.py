@@ -1,23 +1,24 @@
 """
 Lumi's dynamic internal state — implements mood_policy.md.
-Stored in core_state.db lumi_state table as a JSON blob.
+Stored in core.db lumi_state table as a JSON blob.
 """
-import sqlite3
 import json
-from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from agent.subconscious import core
 
 COL = timezone(timedelta(hours=-5))
-
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "core_state.db"
 
 DEFAULT_STATE = {
     "mood_valence": 0.3,
     "mood_energy": 0.6,
     "irritation": 0.1,
     "focus_level": 0.7,
-    "trust_jose": 0.9,
+    "presence_need": 0.0,
+    "state_label": "centered",
+    "state_sentence": "Lumi está centrada, clara y disponible.",
     "emotional_honesty_mode": False,
+    "last_interaction_at": None,
+    "last_meaningful_interaction_at": None,
     "last_day_reset": None,
     "last_updated": None,
 }
@@ -27,39 +28,31 @@ FIELD_RANGES = {
     "mood_energy": (0.0, 1.0),
     "irritation": (0.0, 1.0),
     "focus_level": (0.0, 1.0),
-    "trust_jose": (0.5, 1.0),
+    "presence_need": (0.0, 1.0),
 }
 
 
-def _conn():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 def _read_state() -> dict | None:
-    conn = _conn()
+    conn = core.get_conn()
     row = conn.execute(
-        "SELECT value FROM lumi_state WHERE key = 'internal_state'"
+        "SELECT data FROM lumi_state WHERE key = 'mood_state'"
     ).fetchone()
     conn.close()
     if row:
-        return json.loads(row["value"])
+        return json.loads(row["data"])
     return None
 
 
 def _write_state(state: dict):
     now = datetime.now(COL).isoformat()
     state["last_updated"] = now
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
-        """INSERT INTO lumi_state (key, value, last_updated)
-           VALUES ('internal_state', ?, ?)
+        """INSERT INTO lumi_state (key, data)
+           VALUES ('mood_state', ?)
            ON CONFLICT(key) DO UPDATE SET
-               value = excluded.value,
-               last_updated = excluded.last_updated""",
-        (json.dumps(state, ensure_ascii=False), now),
+               data = excluded.data""",
+        (json.dumps(state, ensure_ascii=False),),
     )
     conn.commit()
     conn.close()
@@ -68,10 +61,7 @@ def _write_state(state: dict):
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 def init_state_table():
-    """Ensure core_state.db and lumi_state row exist. Must run once at startup."""
-    from agent.memory.social import init_core_db
-
-    init_core_db()
+    """Ensure core.db and lumi_state row exist. Must run once at startup."""
     existing = _read_state()
     if existing is None:
         _write_state(DEFAULT_STATE)
@@ -86,7 +76,12 @@ def get_state(user_id: str = None) -> dict:
 
 
 def state_to_text(state: dict) -> str:
-    """Map numeric state to Spanish descriptors per mood_policy.md."""
+    """Return mood description for prompt injection per mood_policy.md §440-456.
+    Prefers state_sentence from JSON, falls back to numeric descriptor build."""
+    sentence = state.get("state_sentence")
+    if sentence:
+        return sentence
+
     valence = state.get("mood_valence", 0.3)
     energy = state.get("mood_energy", 0.6)
     irritation = state.get("irritation", 0.1)
@@ -132,15 +127,17 @@ def apply_deltas(**deltas: float) -> dict:
 
 
 def morning_reset():
-    """Daily regression toward baseline (40-60%). Per mood_policy.md.
-    Trust toward Jose does not regress."""
+    """Daily regression toward baseline per mood_policy.md §329-352.
+    Constants: irritation 60%→0.0, energy 50%→0.6, valence 40%→0.3,
+    focus 40%→0.7, presence_need 35%→0.0."""
     state = get_state()
     now = datetime.now(COL).isoformat()
 
-    state["mood_valence"] = _lerp(state["mood_valence"], 0.3, 0.4)
-    state["mood_energy"] = _lerp(state["mood_energy"], 0.6, 0.5)
     state["irritation"] = _lerp(state["irritation"], 0.0, 0.6)
+    state["mood_energy"] = _lerp(state["mood_energy"], 0.6, 0.5)
+    state["mood_valence"] = _lerp(state["mood_valence"], 0.3, 0.4)
     state["focus_level"] = _lerp(state["focus_level"], 0.7, 0.4)
+    state["presence_need"] = _lerp(state["presence_need"], 0.0, 0.35)
     state["last_day_reset"] = now
 
     _write_state(state)
@@ -149,32 +146,22 @@ def morning_reset():
 
 def check_emotional_honesty_mode() -> bool:
     """Evaluate triggers to enable or disable emotional_honesty_mode.
-    Per mood_policy.md. Returns current value after evaluation."""
+    Per mood_policy.md §355-380. Returns current value after evaluation."""
     state = get_state()
 
     if state["emotional_honesty_mode"]:
-        # Disable: valence >= 0.2 && irritation < 0.3
-        if state["mood_valence"] >= 0.2 and state["irritation"] < 0.3:
+        # Disable: valence >= 0.2 AND irritation < 0.3 AND presence_need < 0.4
+        if (state["mood_valence"] >= 0.2
+                and state["irritation"] < 0.3
+                and state["presence_need"] < 0.4):
             state["emotional_honesty_mode"] = False
             _write_state(state)
     else:
-        # Enable: irritation > 0.6 OR mood_valence < -0.2
-        if state["irritation"] > 0.6 or state["mood_valence"] < -0.2:
+        # Enable: irritation > 0.6 OR mood_valence < -0.2 OR presence_need > 0.6
+        if (state["irritation"] > 0.6
+                or state["mood_valence"] < -0.2
+                or state["presence_need"] > 0.6):
             state["emotional_honesty_mode"] = True
             _write_state(state)
 
     return state["emotional_honesty_mode"]
-
-"""TODO
-affect/state.py       # estado actual
-affect/dynamics.py    # cómo cambia
-affect/readings.py    # cómo se expone o interpreta
-
-readings.py me parece mejor, porque suena a lecturas internas:
-mood
-energy
-trust
-patience
-irritation
-fatigue
-"""

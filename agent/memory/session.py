@@ -1,28 +1,20 @@
 """
 Session turn counter — tracks turns per session and triggers summaries.
-Stored in logs.db: session_turns table.
+Stored in traces.db: session_turns table.
 """
 import sqlite3
 import json
-from pathlib import Path
 from datetime import datetime, timezone, timedelta
+from agent.subconscious import traces
 
 COL = timezone(timedelta(hours=-5))
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "logs.db"
-
-
-def _conn():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
 
 
 def record_turn(session_id: str, user_id: str) -> int:
     """Records a turn for the session. Adds user_id to user_ids if new.
     Returns the new turn_count.
     TODO: multi-user — user_ids JSON array ready for Discord/WhatsApp groups."""
-    conn = _conn()
+    conn = traces.get_conn()
     now = datetime.now(COL).isoformat()
 
     row = conn.execute(
@@ -56,7 +48,7 @@ def record_turn(session_id: str, user_id: str) -> int:
 
 
 def get_session_users(session_id: str) -> list[str]:
-    conn = _conn()
+    conn = traces.get_conn()
     row = conn.execute(
         "SELECT user_ids FROM session_turns WHERE session_id = ?", (session_id,)
     ).fetchone()
@@ -68,7 +60,7 @@ def get_session_users(session_id: str) -> list[str]:
 
 def reset_turns(session_id: str):
     """Deletes the session row after a summary so the next interaction starts fresh."""
-    conn = _conn()
+    conn = traces.get_conn()
     conn.execute("DELETE FROM session_turns WHERE session_id = ?", (session_id,))
     conn.commit()
     conn.close()
@@ -76,7 +68,7 @@ def reset_turns(session_id: str):
 
 def get_stale_sessions(inactive_minutes: int = 30) -> list[str]:
     """Return session_ids where last_turn_at is older than inactive_minutes."""
-    conn = _conn()
+    conn = traces.get_conn()
     rows = conn.execute(
         "SELECT session_id, last_turn_at FROM session_turns WHERE last_turn_at IS NOT NULL"
     ).fetchall()

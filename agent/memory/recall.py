@@ -3,14 +3,14 @@ Interfaz publica de memoria — Fase 4+.
 loop.py y context.py solo importan este modulo.
 
 Implementaciones:
-  src/memory/sqlite_memory.py    — historial, sesiones, resumenes (SQLite)
-  src/memory/mem0_client.py      — Mem0 semantico
-  src/memory/core_state.py       — personas, relaciones, lumi_state
-  src/memory/session_tracker.py  — contador de turnos por sesion
-  src/memory/summary.py          — generacion LLM de resumenes de sesion
+  agent/memory/episodic.py     — historial, sesiones, resumenes (traces.db)
+  agent/memory/semantic.py     — Mem0 semantico
+  agent/memory/social.py       — personas, relaciones, lumi_state (core.db)
+  agent/memory/session.py      — contador de turnos por sesion (traces.db)
+  agent/memory/consolidation.py — generacion LLM de resumenes de sesion (traces.db)
 """
+from agent.subconscious import init_databases
 from agent.memory.episodic import (
-    init_db,
     save_turn,
     get_history,
     get_session_turns,
@@ -44,7 +44,7 @@ from agent.memory.consolidation import generate_summary, get_recent_summaries
 get_profile = get_user_information
 
 __all__ = [
-    "init_db",
+    "init_databases",
     "init_core_db",
     "save_turn",
     "get_history",

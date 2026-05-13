@@ -9,15 +9,14 @@ from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save, handle_web_search
 from agent.expression.synapses import chat, chat_stream
 from agent.cognition.working_memory import build_messages
-from agent.memory.recall import save_turn, init_db, init_core_db, record_turn, generate_summary, reset_turns, get_session_turns, add_memory
+from agent.memory.recall import save_turn, init_databases, record_turn, generate_summary, reset_turns, get_session_turns, add_memory
 from agent.affect.state import init_state_table
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.core")
 
-# Inicializar tablas al importar
-init_db()
-init_core_db()
+# Inicializar bases de datos al importar
+init_databases()
 init_state_table()
 logger.info("core orchestrator initialized")
 

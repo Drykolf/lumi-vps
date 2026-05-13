@@ -2,38 +2,24 @@
 Core state database — person_interest, user_profiles, relations, lumi_state.
 Implements interest_policy.md and relation_policy.md storage layer.
 
-Tables (from 00_schema_sqlite.sql):
+Tables (from 002_create_core.sql):
   person_interest  — Lumi's emotional calculus toward each person
   user_profiles    — structured static data about users (JSON)
   relations        — directed connections between third parties
   lumi_state       — Lumi's own dynamic internal state (JSON)
   skill_proposals  — pending skill evolution drafts
 
-Uses core_state.db (separate from logs.db for conversation history).
+Uses core.db (separate from traces.db for conversation history).
 """
 import sqlite3
 import json
 from pathlib import Path
-
-DB_PATH = Path(__file__).parent.parent.parent / "data" / "core_state.db"
-SCHEMA_PATH = Path(__file__).parent.parent / "subconscious" / "migrations" / "00_schema_sqlite.sql"
-
-
-def _conn():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+from agent.subconscious import core
 
 
 def init_core_db():
-    """Create core_state.db and run the full schema (idempotent)."""
-    sql = SCHEMA_PATH.read_text(encoding="utf-8")
-    conn = _conn()
-    conn.executescript(sql)
-    conn.commit()
-    conn.close()
+    """Create core.db and run the full schema (idempotent)."""
+    core.init()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -60,7 +46,7 @@ def set_user_information(user_id: str, profile: dict = None,
 def create_person_interest(person_id: str, is_jose: int = 0,
                            interest_score: float = 0.10) -> dict:
     """Create an interest row for a new person."""
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         """INSERT OR IGNORE INTO person_interest (person_id, is_jose, interest_score)
            VALUES (?, ?, ?)""",
@@ -76,7 +62,7 @@ def create_person_interest(person_id: str, is_jose: int = 0,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_person(person_id: str) -> dict | None:
-    conn = _conn()
+    conn = core.get_conn()
     row = conn.execute(
         "SELECT * FROM person_interest WHERE person_id = ?", (person_id,)
     ).fetchone()
@@ -93,7 +79,7 @@ def _update_person_interest(person_id: str, **kwargs) -> dict | None:
 
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     values = list(updates.values()) + [person_id]
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         f"UPDATE person_interest SET {set_clause} WHERE person_id = ?", values
     )
@@ -103,7 +89,7 @@ def _update_person_interest(person_id: str, **kwargs) -> dict | None:
 
 
 def _increment_mention(person_id: str):
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         """UPDATE person_interest
            SET mention_count = mention_count + 1,
@@ -116,7 +102,7 @@ def _increment_mention(person_id: str):
 
 
 def _list_active_persons() -> list[dict]:
-    conn = _conn()
+    conn = core.get_conn()
     rows = conn.execute(
         "SELECT * FROM person_interest WHERE status != 'forgotten' ORDER BY interest_score DESC"
     ).fetchall()
@@ -166,7 +152,7 @@ def add_delta(person_id: str, delta: float,
     if effective == 0:
         return person
 
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         """UPDATE person_interest
            SET interest_score = ?,
@@ -184,7 +170,7 @@ def add_delta(person_id: str, delta: float,
 
 def _recalc_status(person_id: str, score: float):
     """Update status triggered by score crossing thresholds."""
-    conn = _conn()
+    conn = core.get_conn()
     row = conn.execute(
         "SELECT status FROM person_interest WHERE person_id = ?", (person_id,)
     ).fetchone()
@@ -210,7 +196,7 @@ def _recalc_status(person_id: str, score: float):
 def commit_session_close():
     """Reset all session_delta values to 0. Called at session end.
     interest_scores have already been updated turn-by-turn."""
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute("UPDATE person_interest SET session_delta = 0.0 WHERE session_delta != 0.0")
     conn.commit()
     conn.close()
@@ -222,7 +208,7 @@ def run_decay():
     Non-Jose only, score >= 0, last mentioned 28+ days ago."""
     sql = (Path(__file__).parent.parent / "subconscious" / "migrations" / "interest_decay.sql")
     script = sql.read_text(encoding="utf-8")
-    conn = _conn()
+    conn = core.get_conn()
     conn.executescript(script)
     conn.commit()
     conn.close()
@@ -233,7 +219,7 @@ def run_decay():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_user_profile(user_id: str) -> dict | None:
-    conn = _conn()
+    conn = core.get_conn()
     row = conn.execute(
         "SELECT data FROM user_profiles WHERE user_id = ?", (user_id,)
     ).fetchone()
@@ -247,7 +233,7 @@ def _set_user_profile(user_id: str, data: dict):
     from datetime import datetime, timezone, timedelta
     COL = timezone(timedelta(hours=-5))
     now = datetime.now(COL).isoformat()
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         """INSERT INTO user_profiles (user_id, data, updated_at)
            VALUES (?, ?, ?)
@@ -261,7 +247,7 @@ def _set_user_profile(user_id: str, data: dict):
 
 def find_user_id_by_name(name: str) -> str | None:
     """Search user_profiles JSON for matching name or alias."""
-    conn = _conn()
+    conn = core.get_conn()
     rows = conn.execute("SELECT user_id, data FROM user_profiles").fetchall()
     conn.close()
     for row in rows:
@@ -280,7 +266,7 @@ def add_relation(from_person_id: str, to_person_id: str,
                  inferred: int = 0) -> dict | None:
     """Create a directed relation between two person_ids.
     Never stores relations involving 'lumi' (enforced by schema CHECK)."""
-    conn = _conn()
+    conn = core.get_conn()
     try:
         conn.execute(
             """INSERT INTO relations
@@ -303,7 +289,7 @@ def add_relation(from_person_id: str, to_person_id: str,
 
 def get_relations(person_id: str) -> list[dict]:
     """Get all relations where person_id appears as from or to."""
-    conn = _conn()
+    conn = core.get_conn()
     rows = conn.execute(
         """SELECT * FROM relations
            WHERE from_person_id = ? OR to_person_id = ?
@@ -315,7 +301,7 @@ def get_relations(person_id: str) -> list[dict]:
 
 
 def get_relation_between(id1: str, id2: str) -> dict | None:
-    conn = _conn()
+    conn = core.get_conn()
     row = conn.execute(
         """SELECT * FROM relations
            WHERE (from_person_id = ? AND to_person_id = ?)
@@ -327,14 +313,14 @@ def get_relation_between(id1: str, id2: str) -> dict | None:
 
 
 def delete_relation(relation_id: int):
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute("DELETE FROM relations WHERE relation_id = ?", (relation_id,))
     conn.commit()
     conn.close()
 
 
 def increment_relation_mention(from_person_id: str, to_person_id: str):
-    conn = _conn()
+    conn = core.get_conn()
     conn.execute(
         """UPDATE relations
            SET mention_count = mention_count + 1,
@@ -357,7 +343,7 @@ def infer_family_relations() -> list[dict]:
             return None
         return add_relation(from_id, to_id, rtype, desc, inferred=1)
 
-    conn = _conn()
+    conn = core.get_conn()
     families = conn.execute(
         "SELECT from_person_id, to_person_id, description FROM relations WHERE relation_type = 'family'"
     ).fetchall()
