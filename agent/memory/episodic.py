@@ -63,3 +63,55 @@ def mark_summarized(session_id: str):
     )
     conn.commit()
     conn.close()
+
+
+def get_unmood_evaluated(since_ts: str, limit: int = 200) -> list[dict]:
+    """Rows not yet mood-evaluated since a timestamp, ordered by id."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT id, role, content, user_id, session_id, ts
+           FROM history
+           WHERE mood_evaluated = 0 AND ts >= ?
+           ORDER BY id ASC
+           LIMIT ?""",
+        (since_ts, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_mood_evaluated(max_id: int):
+    """Mark all rows up to max_id as mood-evaluated."""
+    conn = traces.get_conn()
+    conn.execute(
+        "UPDATE history SET mood_evaluated = 1 WHERE mood_evaluated = 0 AND id <= ?",
+        (max_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_unmemory_evaluated(since_ts: str, limit: int = 500) -> list[dict]:
+    """Rows not yet memory-evaluated since a timestamp, ordered by id."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT id, role, content, user_id, session_id, ts
+           FROM history
+           WHERE memory_evaluated = 0 AND ts >= ?
+           ORDER BY id ASC
+           LIMIT ?""",
+        (since_ts, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_memory_evaluated(max_id: int):
+    """Mark all rows up to max_id as memory-evaluated."""
+    conn = traces.get_conn()
+    conn.execute(
+        "UPDATE history SET memory_evaluated = 1 WHERE memory_evaluated = 0 AND id <= ?",
+        (max_id,),
+    )
+    conn.commit()
+    conn.close()

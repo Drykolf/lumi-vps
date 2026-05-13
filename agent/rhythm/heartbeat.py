@@ -21,7 +21,6 @@ async def beat():
     logger.info("beat — Lumi scheduler alive")
 
 
-@scheduler.scheduled_job("interval", minutes=10)
 async def idle_session_check():
     from agent.memory.session import get_stale_sessions, reset_turns
     from agent.memory.consolidation import generate_summary
@@ -36,26 +35,50 @@ async def idle_session_check():
         reset_turns(sid)
         logger.info("  session=%s summarized=%s", sid, bool(summary))
 
+@scheduler.scheduled_job("interval", minutes=15)
+async def rhythm_tick():
+    """sesión inactiva hace 30 min
+        summary pendiente
+        mood_eval pendiente
+        idle drift horario
+        catch-up si algo quedó sin procesar"""
+    """Frequent rhythm: idle sessions, pending summaries, session mood deltas, hourly mood drift."""
+    logger.info("rhythm_tick fired")
+    await idle_session_check()
+
+    #if await rhythm_due("hourly_mood_check", every_minutes=60):
+     #   async with rhythm_task("hourly_mood_check"):
+      #      await mood_check()
 
 # ── Rhythm jobs (cron) ──────────────────────────────────────────────────────────
 
 @scheduler.scheduled_job('cron', hour=7, minute=0)
 async def daily_morning():
+    """Lumi amanece.
+        Se centra.
+        Baja irritación.
+        Recupera energía."""
     """Mood regression toward baseline at 7am COT (mood_policy.md)."""
     logger.info("daily_morning fired")
 
 
 @scheduler.scheduled_job('cron', hour=3, minute=0)
 async def daily_maintenance():
+    """consolidar memorias
+        analizar perfiles
+        relaciones
+        tareas realizadas
+        aprendizajes
+        memoria del día"""
     """Memory tier checks + family inference + cleanup at 3am COT."""
     logger.info("daily_maintenance fired")
 
 
 @scheduler.scheduled_job('cron', day_of_week='mon', hour=4, minute=0)
 async def weekly_decay():
+    #olvido / enfriamiento social
     """Interest score decay for inactive persons (interest_policy.md)."""
     logger.info("weekly_decay fired")
-
 
 # ── Lifecycle ──────────────────────────────────────────────────────────────────
 

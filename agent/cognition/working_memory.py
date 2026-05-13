@@ -68,7 +68,7 @@ async def _memory_check(message: str, sid: str) -> dict:
 
 
 async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
-    state = get_state(user_id)
+    state = get_state()
     now = datetime.now(COL).strftime("%d/%m/%Y %H:%M COT")
     sid = metadata.get("session_id", "default")
 

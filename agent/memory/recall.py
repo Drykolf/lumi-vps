@@ -15,6 +15,10 @@ from agent.memory.episodic import (
     get_history,
     get_session_turns,
     mark_summarized,
+    get_unmood_evaluated,
+    mark_mood_evaluated,
+    get_unmemory_evaluated,
+    mark_memory_evaluated,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -50,6 +54,10 @@ __all__ = [
     "get_history",
     "get_session_turns",
     "mark_summarized",
+    "get_unmood_evaluated",
+    "mark_mood_evaluated",
+    "get_unmemory_evaluated",
+    "mark_memory_evaluated",
     "search_relevant",
     "add_memory",
     "get_user_information",

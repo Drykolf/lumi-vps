@@ -170,3 +170,17 @@ CREATE TABLE IF NOT EXISTS skill_proposals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_skill_proposals_status ON skill_proposals(status);
+
+-- ============================================================
+-- HEARTBEAT_STATE — scheduler job registry and status
+-- ============================================================
+CREATE TABLE IF NOT EXISTS heartbeat_state (
+    task_name TEXT PRIMARY KEY,
+    last_run_at TEXT,
+    last_success_at TEXT,
+    next_run_at TEXT,
+    status TEXT NOT NULL DEFAULT 'never',
+    last_error TEXT,
+    run_count INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
