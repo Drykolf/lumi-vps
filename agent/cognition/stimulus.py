@@ -8,7 +8,7 @@ import re
 from agent.cognition import attention
 from agent.expression.synapses import chat
 from agent.cognition.working_memory import build_messages
-from agent.memory.recall import add_memory_explicit
+from agent.memory import add_memory_explicit
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.handlers")

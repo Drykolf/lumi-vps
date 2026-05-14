@@ -4,10 +4,10 @@ Stored in traces.db: session_turns table.
 """
 import sqlite3
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from agent.subconscious import traces
 
-COL = timezone(timedelta(hours=-5))
+UTC = timezone.utc
 
 
 def record_turn(session_id: str, user_id: str) -> int:
@@ -15,7 +15,7 @@ def record_turn(session_id: str, user_id: str) -> int:
     Returns the new turn_count.
     TODO: multi-user — user_ids JSON array ready for Discord/WhatsApp groups."""
     conn = traces.get_conn()
-    now = datetime.now(COL).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     row = conn.execute(
         "SELECT user_ids, turn_count FROM session_turns WHERE session_id = ?",
@@ -74,7 +74,7 @@ def get_stale_sessions(inactive_minutes: int = 30) -> list[str]:
     ).fetchall()
     conn.close()
 
-    now = datetime.now(COL)
+    now = datetime.now(UTC)
     stale = []
     for row in rows:
         last_turn = datetime.fromisoformat(row["last_turn_at"])

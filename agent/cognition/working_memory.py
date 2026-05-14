@@ -1,15 +1,15 @@
 import json
 import re
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from agent.memory.recall import get_history, search_relevant, get_user_information, get_recent_summaries, create_person_interest, get_session_turns, set_user_information
+from datetime import datetime, timezone
+from agent.memory import get_history, search_relevant, get_user_information, get_recent_summaries, create_person_interest, get_session_turns, set_user_information
 from agent.expression.synapses import chat
 from agent.affect.state import get_state, state_to_text
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.context")
 
-COL = timezone(timedelta(hours=-5))
+UTC = timezone.utc
 SOUL_PATH = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
 
 _cached_prefix = None
@@ -69,7 +69,7 @@ async def _memory_check(message: str, sid: str) -> dict:
 
 async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
     state = get_state()
-    now = datetime.now(COL).strftime("%d/%m/%Y %H:%M COT")
+    now = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
     sid = metadata.get("session_id", "default")
 
     relevant_memories = await search_relevant(user_id, message)
@@ -108,6 +108,7 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
     channel = metadata.get("channel", "desktop")
     session_id = metadata.get("session_id", "unknown")
     parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now)
+    parts.append("[Ubicacion] La ubicacion principal de Lumi es en Colombia, guarda todo en formato UTC, pero debe interpretar horarios a hora colombiana (UTC-5).")
 
     return "\n\n".join(parts)
 

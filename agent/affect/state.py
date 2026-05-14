@@ -3,10 +3,10 @@ Lumi's dynamic internal state — implements mood_policy.md.
 Stored in core.db lumi_state table as a JSON blob.
 """
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from agent.subconscious import core
 
-COL = timezone(timedelta(hours=-5))
+UTC = timezone.utc
 
 DEFAULT_STATE = {
     "mood_valence": 0.3,
@@ -44,7 +44,7 @@ def _read_state() -> dict | None:
 
 
 def _write_state(state: dict):
-    now = datetime.now(COL).isoformat()
+    now = datetime.now(UTC).isoformat()
     state["last_updated"] = now
     conn = core.get_conn()
     conn.execute(
@@ -131,7 +131,7 @@ def morning_reset():
     Constants: irritation 60%→0.0, energy 50%→0.6, valence 40%→0.3,
     focus 40%→0.7, presence_need 35%→0.0."""
     state = get_state()
-    now = datetime.now(COL).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     state["irritation"] = _lerp(state["irritation"], 0.0, 0.6)
     state["mood_energy"] = _lerp(state["mood_energy"], 0.6, 0.5)

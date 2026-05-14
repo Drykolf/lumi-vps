@@ -94,8 +94,9 @@ Tool schemas: local tools auto-generate from function `__doc__`, remote tools pr
 | Semantic memory | Mem0 + pgvector (port 8100) | Facts, people, persistent knowledge |
 | Internal state | SQLite (`data/core_state.db`) | Lumi's mood, energy, focus |
 
-- `agent/memory/recall.py` is a **facade** — stream.py and working_memory.py import only from there. Real impl is in `agent/memory/semantic.py`.
+- `agent/memory/__init__.py` is the **public API** — stream.py and working_memory.py import from there. Real impl is in `agent/memory/semantic.py`.
 - `agent/memory/episodic.py` exists but appears superseded by `semantic.py`.
+- `agent/memory/mindstream/` holds social, session, and consolidation modules.
 - Conversation history is NOT stored in Mem0 (by design — it's sequential, not semantic).
 
 ## Personality

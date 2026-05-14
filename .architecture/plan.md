@@ -27,12 +27,13 @@ agent/
 │   ├── step_3_5_flash.py
 │   └── nemotron_super_120b.py
 ├── memory/               # Memory layer
-│   ├── recall.py          # single import point for agent (facade)
+│   ├── __init__.py         # single import point for agent (facade)
 │   ├── semantic.py        # Mem0 REST API (add, search, explicit save)
 │   ├── episodic.py        # conversation history + session tables
-│   ├── social.py          # person_interest, user_profiles, relations
-│   ├── session.py         # per-session turn counting
-│   └── consolidation.py   # LLM-powered session summaries
+│   ├── mindstream/         # user state, session tracking, summaries
+│   │   ├── social.py          # person_interest, user_profiles, relations
+│   │   ├── session.py         # per-session turn counting
+│   │   └── consolidation.py   # LLM-powered session summaries
 ├── bridge/               # (legacy bridge package, superseded by perception/)
 ├── affect/              # internal state (mood/energy/trust)
 │   └── state.py
@@ -132,12 +133,12 @@ After these 4 sessions, Phase 4 is complete. The manual's feature catalog items 
 | `agent/cognition/stimulus.py` | Message type handlers + explicit save processing + save verification |
 | `agent/cognition/working_memory.py` | Builds system prompt (soul + state + summaries + memories + profile + interest) |
 | `agent/cognition/attention.py` | Keyword classifier (chat/web_search/long_task/explicit_save) |
-| `agent/memory/recall.py` | Single import point for all memory operations |
+| `agent/memory/__init__.py` | Single import point for all memory operations |
 | `agent/memory/semantic.py` | Mem0 REST API — add_memory, search_relevant, save_explicit |
 | `agent/memory/episodic.py` | SQLite — history, session_turns, session_summaries |
-| `agent/memory/social.py` | SQLite — person_interest, user_profiles, relations, interest deltas |
-| `agent/memory/consolidation.py` | LLM session summary generation |
-| `agent/memory/session.py` | Per-session turn counting |
+| `agent/memory/mindstream/social.py` | SQLite — person_interest, user_profiles, relations, interest deltas |
+| `agent/memory/mindstream/consolidation.py` | LLM session summary generation |
+| `agent/memory/mindstream/session.py` | Per-session turn counting |
 | `agent/llm/factory.py` | Model fallback orchestration (chat + chat_stream) |
 | `agent/rhythm/heartbeat.py` | APScheduler — 5-min beat + 10-min idle check |
 Proposed Plan
@@ -165,3 +166,5 @@ Cleanup	reflection_policy.md	Clear Mem0 history, mark sessions closed
 New file to create: agent/subconscious/reflection.py (or agent/memory/reflection.py) — implements the full pipeline orchestration.
 4. Wire weekly cron (Mon 4am)
 Simple — wire run_decay() into the existing weekly_decay stub.
+
+

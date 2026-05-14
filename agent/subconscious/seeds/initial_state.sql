@@ -19,10 +19,10 @@ VALUES (
         'state_label', 'centered',
         'state_sentence', 'Lumi está centrada, clara y disponible.',
         'emotional_honesty_mode', json('false'),
-        'last_interaction_at', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '-05:00',
-        'last_meaningful_interaction_at', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '-05:00',
-        'last_day_reset', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '-05:00',
-        'last_updated', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '-05:00'
+        'last_interaction_at', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '+00:00',
+        'last_meaningful_interaction_at', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '+00:00',
+        'last_day_reset', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '+00:00',
+        'last_updated', strftime('%Y-%m-%dT%H:%M:%S', 'now') || '+00:00'
     )
 )
 ON CONFLICT(key) DO NOTHING;

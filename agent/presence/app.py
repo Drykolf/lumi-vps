@@ -8,7 +8,7 @@ import json
 from dotenv import load_dotenv
 from agent.cognition.stream import run, run_stream
 from agent.perception.websocket import on_connect, connected_users, start_heartbeat
-from agent.memory.recall import get_user_information, set_user_information
+from agent.memory import get_user_information, set_user_information
 from agent.substrate.logger import get_logger, configure_root
 from agent.subconscious import init_databases
 import agent.rhythm.heartbeat as scheduler

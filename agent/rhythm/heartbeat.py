@@ -1,94 +1,84 @@
 """Lumi scheduler — periodic and cron-based tasks via APScheduler."""
 import logging
-from datetime import timezone, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from agent.substrate.logger import get_logger
+from agent.rhythm.cadence import (
+    COL,
+    RHYTHM_TICK_MINUTES,
+    DAILY_MORNING_HOUR,
+    DAILY_MORNING_MINUTE,
+    NIGHTLY_QUIESCENCE_HOUR,
+    NIGHTLY_QUIESCENCE_MINUTE,
+    WEEKLY_FORGETTING_DAY,
+    WEEKLY_FORGETTING_HOUR,
+    WEEKLY_FORGETTING_MINUTE,
+)
 
-COL = timezone(timedelta(hours=-5))
 logger = get_logger("rhythm.heartbeat")
 
-# Suppress APScheduler's own job lifecycle logs
 logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
 scheduler = AsyncIOScheduler(timezone=COL)
 
 
-# ── Active jobs ────────────────────────────────────────────────────────────────
+def register_rhythm_jobs() -> None:
+    """Register all scheduled jobs with APScheduler. Called at startup."""
+    from agent.rhythm.routines.pulse import rhythm_tick
+    from agent.rhythm.routines.morning import daily_morning
+    from agent.rhythm.routines.quiescence import nightly_quiescence
+    from agent.rhythm.routines.forgetting import weekly_forgetting
 
-#@scheduler.scheduled_job("interval", minutes=5)
-async def beat():
-    logger.info("beat — Lumi scheduler alive")
+    scheduler.add_job(
+        rhythm_tick,
+        "interval",
+        minutes=RHYTHM_TICK_MINUTES,
+        timezone=COL,
+        id="rhythm_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )
 
+    scheduler.add_job(
+        daily_morning,
+        "cron",
+        hour=DAILY_MORNING_HOUR,
+        minute=DAILY_MORNING_MINUTE,
+        timezone=COL,
+        id="daily_morning",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
 
-async def idle_session_check():
-    from agent.memory.session import get_stale_sessions, reset_turns
-    from agent.memory.consolidation import generate_summary
-    #logger.info("idle sessions check")
-    stale = get_stale_sessions(inactive_minutes=30)
-    if not stale:
-        return
+    scheduler.add_job(
+        nightly_quiescence,
+        "cron",
+        hour=NIGHTLY_QUIESCENCE_HOUR,
+        minute=NIGHTLY_QUIESCENCE_MINUTE,
+        timezone=COL,
+        id="daily_maintenance",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
 
-    logger.info("idle sessions found: %d", len(stale))
-    for sid in stale:
-        summary = await generate_summary(sid)
-        reset_turns(sid)
-        logger.info("  session=%s summarized=%s", sid, bool(summary))
+    scheduler.add_job(
+        weekly_forgetting,
+        "cron",
+        day_of_week=WEEKLY_FORGETTING_DAY,
+        hour=WEEKLY_FORGETTING_HOUR,
+        minute=WEEKLY_FORGETTING_MINUTE,
+        timezone=COL,
+        id="weekly_decay",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
 
-@scheduler.scheduled_job("interval", minutes=15)
-async def rhythm_tick():
-    """sesión inactiva hace 30 min
-        summary pendiente
-        mood_eval pendiente
-        idle drift horario
-        catch-up si algo quedó sin procesar"""
-    """Frequent rhythm: idle sessions, pending summaries, session mood deltas, hourly mood drift."""
-    logger.info("rhythm_tick fired")
-    await idle_session_check()
-
-    #if await rhythm_due("hourly_mood_check", every_minutes=60):
-     #   async with rhythm_task("hourly_mood_check"):
-      #      await mood_check()
-
-# ── Rhythm jobs (cron) ──────────────────────────────────────────────────────────
-
-@scheduler.scheduled_job('cron', hour=7, minute=0)
-async def daily_morning():
-    """Lumi amanece.
-        Se centra.
-        Baja irritación.
-        Recupera energía."""
-    """Mood regression toward baseline at 7am COT (mood_policy.md)."""
-    logger.info("daily_morning fired")
-
-
-@scheduler.scheduled_job('cron', hour=3, minute=0)
-async def daily_maintenance():
-    """consolidar memorias
-        analizar perfiles
-        relaciones
-        tareas realizadas
-        aprendizajes
-        memoria del día"""
-    """Memory tier checks + family inference + cleanup at 3am COT."""
-    logger.info("daily_maintenance fired")
-
-
-@scheduler.scheduled_job('cron', day_of_week='mon', hour=4, minute=0)
-async def weekly_decay():
-    #olvido / enfriamiento social
-    """Interest score decay for inactive persons (interest_policy.md)."""
-    logger.info("weekly_decay fired")
-
-# ── Lifecycle ──────────────────────────────────────────────────────────────────
 
 def start():
+    register_rhythm_jobs()
     scheduler.start()
     logger.info("rhythm started | tz=UTC-5")
-
-
-"""TODO
-heartbeat.py	Perfecto para beat operativo.
-quiescence.py	Muy bueno para idle check / reposo / consolidación nocturna.
-cadence.py	Muy bueno para intervalos, timers y configuración temporal.
-"""

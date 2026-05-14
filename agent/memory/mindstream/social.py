@@ -230,9 +230,8 @@ def _get_user_profile(user_id: str) -> dict | None:
 
 
 def _set_user_profile(user_id: str, data: dict):
-    from datetime import datetime, timezone, timedelta
-    COL = timezone(timedelta(hours=-5))
-    now = datetime.now(COL).isoformat()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
     conn = core.get_conn()
     conn.execute(
         """INSERT INTO user_profiles (user_id, data, updated_at)

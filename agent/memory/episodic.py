@@ -4,10 +4,10 @@ Stored in data/traces.db via TracesRepository.
 """
 import sqlite3
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from agent.subconscious import traces
 
-COL = timezone(timedelta(hours=-5))
+UTC = timezone.utc
 
 
 def init_db():
@@ -20,7 +20,7 @@ def save_turn(user_id: str, role: str, content: str, session_id: str = "default"
     conn = traces.get_conn()
     conn.execute(
         "INSERT INTO history (user_id, role, content, session_id, ts) VALUES (?, ?, ?, ?, ?)",
-        (user_id, role, content, session_id, datetime.now(COL).isoformat())
+        (user_id, role, content, session_id, datetime.now(UTC).isoformat())
     )
     conn.commit()
     conn.close()

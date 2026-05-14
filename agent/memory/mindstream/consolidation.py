@@ -3,15 +3,15 @@ Session summary generator — LLM-powered session summaries every 5 turns.
 Stores in traces.db: session_summaries table.
 """
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from agent.subconscious import traces
 from agent.memory.episodic import get_session_turns, mark_summarized
-from agent.memory.session import get_session_users
+from agent.memory.mindstream.session import get_session_users
 from agent.substrate.logger import get_logger
 
 logger = get_logger("memory.summary")
 
-COL = timezone(timedelta(hours=-5))
+UTC = timezone.utc
 
 _SUMMARY_PROMPT = """Eres Lumi. Resume esta sesion en 2-3 oraciones, en espanol, primera persona.
 Participantes: {participants}.
@@ -68,7 +68,7 @@ async def generate_summary(session_id: str) -> str | None:
     conn.execute(
         """INSERT INTO session_summaries (user_ids, summary, created_at)
            VALUES (?, ?, ?)""",
-        (json.dumps(user_ids, ensure_ascii=False), summary, datetime.now(COL).isoformat()),
+        (json.dumps(user_ids, ensure_ascii=False), summary, datetime.now(UTC).isoformat()),
     )
     conn.commit()
     conn.close()
