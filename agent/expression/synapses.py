@@ -4,6 +4,7 @@ loop.py importa este módulo directamente.
 """
 import asyncio
 import logging
+import time
 from enum import Enum
 from openai import RateLimitError, APIStatusError
 from agent.expression.providers.qwen3_5_35b import Qwen3_5_35B
@@ -68,23 +69,64 @@ async def _try_models(method: str, model_group: ModelGroup = ModelGroup.MAIN, **
     raise RuntimeError("Todos los modelos están saturados.")
 
 
-async def chat(messages, tool_schemas=None, max_tokens=512, thinking=False,
+async def test_models(reasoning_effort="default") -> dict:
+    """
+    Prueba todos los modelos registrados con un mensaje simple.
+    Retorna resultados agrupados por grupo (main/lightweight).
+    """
+    results: dict[str, dict] = {}
+    test_messages = [{"role": "user", "content": "Hola, cuanto es 2 + 2? solo responder con el resultado"}]
+
+    for group_name, models in _MODEL_GROUPS.items():
+        group_results = {}
+        for llm in models:
+            model_name = llm.model
+            start = time.monotonic()
+            try:
+                if reasoning_effort == "default":
+                    response = await llm.chat(test_messages, max_tokens=20, temperature=0.1)
+                else:
+                    response = await llm.chat(test_messages, max_tokens=20, temperature=0.1, reasoning_effort=reasoning_effort)
+                elapsed = time.monotonic() - start
+                content = response.get("content", "")
+                group_results[model_name] = {
+                    "status": "ok",
+                    "latency_ms": round(elapsed * 1000, 1),
+                    "reasoning_effort": reasoning_effort,
+                    "response": content[:100],
+                }
+                logger.info(f"[test_models] {model_name} OK ({elapsed*1000:.0f}ms): {content[:100]}")
+            except Exception as e:
+                elapsed = time.monotonic() - start
+                group_results[model_name] = {
+                    "status": "error",
+                    "latency_ms": round(elapsed * 1000, 1),
+                    "error": str(e),
+                    "reasoning_effort": reasoning_effort,
+                }
+                logger.warning(f"[test_models] {model_name} FAIL ({elapsed*1000:.0f}ms): {e}")
+        results[group_name.value] = group_results
+
+    return results
+
+
+async def chat(messages, tool_schemas=None, max_tokens=512,
                temperature: float = 0.7, reasoning_effort: str | None = None,
                model_group: ModelGroup = ModelGroup.MAIN) -> dict:
     return await _try_models("chat", model_group=model_group, messages=messages,
                               tool_schemas=tool_schemas, max_tokens=max_tokens,
-                              thinking=thinking, temperature=temperature,
+                              temperature=temperature,
                               reasoning_effort=reasoning_effort)
 
 
-async def chat_stream(messages, tool_schemas=None, thinking=False,
+async def chat_stream(messages, tool_schemas=None,
                       temperature: float = 0.7, reasoning_effort: str | None = None,
                       model_group: ModelGroup = ModelGroup.MAIN):
     # chat_stream es async generator — necesita manejo especial
     for llm_instance in _resolve_models(model_group):
         for attempt in range(2):
             try:
-                async for chunk in llm_instance.chat_stream(messages, tool_schemas, thinking, temperature, reasoning_effort):
+                async for chunk in llm_instance.chat_stream(messages, tool_schemas, temperature, reasoning_effort):
                     yield chunk
                 return
             except RateLimitError:

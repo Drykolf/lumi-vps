@@ -14,7 +14,6 @@ class BaseLLM(ABC):
         messages: list[dict],
         tool_schemas: list[dict] = None,
         max_tokens: int = 512,
-        thinking: bool = False,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
     ) -> dict:
@@ -28,7 +27,6 @@ class BaseLLM(ABC):
         self,
         messages: list[dict],
         tool_schemas: list[dict] = None,
-        thinking: bool = False,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
     ):

@@ -129,6 +129,14 @@ async def get_tools(x_api_key: str = Header(...)):
             result[name] = {"location": "bridge", "connected": bool(connected)}
     return {"tools": result, "bridge_connected": connected}
 
+# ── LLM Test ─────────────────────────────────────────────────────────────────
+
+@app.get("/v1/testllm")
+async def test_llm(x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+    from agent.expression.synapses import test_models
+    return {"results": await test_models(reasoning_effort="none")}
+
 # ── User Profiles ─────────────────────────────────────────────────────────────
 @app.get("/v1/memories/{user_id}")
 async def get_memories(user_id: str, x_api_key: str = Header(None)):

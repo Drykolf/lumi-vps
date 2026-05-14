@@ -241,7 +241,7 @@ async def evaluate_mood(
     involved_people: dict | None = None,
 ) -> tuple[dict, str]:
     """
-    Call lightweight LLM with thinking=True to evaluate mood changes.
+    Call lightweight LLM with reasoning_effort to evaluate mood changes.
 
     Returns (new_state_dict, reasoning_summary).
     Does NOT save — caller decides whether to persist.
@@ -258,7 +258,7 @@ async def evaluate_mood(
                 {"role": "user", "content": user_msg},
             ],
             max_tokens=500,
-            thinking=True,
+            reasoning_effort="low",
             model_group=ModelGroup.LIGHTWEIGHT,
         )
 
