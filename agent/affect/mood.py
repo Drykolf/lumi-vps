@@ -58,6 +58,9 @@ def _write_state(state: dict):
     conn.close()
 
 
+write_state = _write_state
+
+
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 def init_state_table():

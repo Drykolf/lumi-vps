@@ -27,9 +27,13 @@ VALUES (
 )
 ON CONFLICT(key) DO NOTHING;
 
+-- Seed user profile for Jose
+INSERT OR IGNORE INTO user_profiles (user_id, data, updated_at)
+VALUES ('jose', '{"name": "Jose Barco"}', datetime('now'));
+
 -- Seed heartbeat tasks (mandatory rows, status defaults to 'never')
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('rhythm_tick');
-INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('hourly_mood_check');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('mood_check');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_morning');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_maintenance');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('weekly_decay');

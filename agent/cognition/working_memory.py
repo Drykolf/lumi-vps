@@ -4,19 +4,28 @@ from pathlib import Path
 from datetime import datetime, timezone
 from agent.memory import get_history, search_relevant, get_user_information, get_recent_summaries, create_person_interest, get_session_turns, set_user_information
 from agent.expression.synapses import chat
-from agent.affect.state import get_state, state_to_text
+from agent.affect import get_state, state_to_text
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.context")
 
 UTC = timezone.utc
 SOUL_PATH = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
+ATTITUDE_PATH = Path(__file__).parent.parent / "identity" / "attitude.md"
 
 _cached_prefix = None
 
 def _build_cached_prefix() -> str:
+    parts = []
+
     if SOUL_PATH.exists():
-        return SOUL_PATH.read_text(encoding="utf-8")
+        parts.append(SOUL_PATH.read_text(encoding="utf-8"))
+
+    if ATTITUDE_PATH.exists():
+        parts.append(ATTITUDE_PATH.read_text(encoding="utf-8"))
+
+    if parts:
+        return "\n\n---\n\n".join(parts)
 
     return (
         "Eres Lumi, asistente personal de Jose Barco. "
