@@ -15,6 +15,8 @@ class BaseLLM(ABC):
         tool_schemas: list[dict] = None,
         max_tokens: int = 512,
         thinking: bool = False,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
     ) -> dict:
         """
         Retorna dict con keys: role, content, tool_calls.
@@ -27,6 +29,8 @@ class BaseLLM(ABC):
         messages: list[dict],
         tool_schemas: list[dict] = None,
         thinking: bool = False,
+        temperature: float = 0.7,
+        reasoning_effort: str | None = None,
     ):
         """
         Async generator que yield chunks de texto.

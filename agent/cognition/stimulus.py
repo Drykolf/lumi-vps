@@ -101,7 +101,3 @@ async def handle_explicit_save(user_id: str, message: str, sid: str, metadata: d
         reply_text = f"[neutral] Listo, guarde {cat_name} en mi memoria."
     logger.info(f"[explicit_save] response | reply_len={len(reply_text)} | preview={reply_text[:80]}")
     return reply_text
-
-
-def handle_web_search(metadata: dict):
-    metadata["web_search_needed"] = True

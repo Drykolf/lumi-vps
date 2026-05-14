@@ -66,7 +66,7 @@ async def mood_check() -> None:
     else:
         # TODO: Add persons interest and profile of everyone involved
         new_state, reasoning = await evaluate_mood(messages, current)
-        logger.info(f"[mood_check] LLM eval {new_state} | reasoning={reasoning[:120]}")
+        #logger.info(f"[mood_check] LLM eval {new_state} | reasoning={reasoning[:120]}")
         max_id = max(m["id"] for m in messages)
         mark_mood_evaluated(max_id)
         logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:120]}")

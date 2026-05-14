@@ -119,12 +119,12 @@ async def startup():
 @app.get("/v1/tools")
 async def get_tools(x_api_key: str = Header(...)):
     verify_key(x_api_key)
-    from agent.cognition import intention
+    from agent.faculties.registry import _local_tools, _remote_tools
     connected = connected_users()
     result = {}
-    for name in intention._local_tools:
+    for name in _local_tools:
         result[name] = {"location": "vps", "connected": True}
-    for name in intention._remote_tools:
+    for name in _remote_tools:
         if name not in result:  # no duplicar si está en ambos
             result[name] = {"location": "bridge", "connected": bool(connected)}
     return {"tools": result, "bridge_connected": connected}
