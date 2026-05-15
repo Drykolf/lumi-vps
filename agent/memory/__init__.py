@@ -45,6 +45,7 @@ from agent.memory.mindstream.social import (
 )
 from agent.memory.mindstream.session import record_turn, get_session_users, reset_turns, get_stale_sessions
 from agent.memory.mindstream.consolidation import generate_summary, get_recent_summaries
+from agent.memory.mindstream.cleanup import cleanup_history, cleanup_summaries, cleanup_heartbeat_runs, run_all_cleanups
 
 # Backward compat alias
 get_profile = get_user_information
@@ -80,4 +81,8 @@ __all__ = [
     "get_stale_sessions",
     "generate_summary",
     "get_recent_summaries",
+    "cleanup_history",
+    "cleanup_summaries",
+    "cleanup_heartbeat_runs",
+    "run_all_cleanups",
 ]

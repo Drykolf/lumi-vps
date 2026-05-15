@@ -13,4 +13,13 @@ async def daily_morning() -> None:
 
 async def morning_regression() -> None:
     """Pulls mood fields partially toward baseline."""
-    ...
+    from agent.affect import morning_reset
+    from agent.substrate.logger import get_logger
+    logger = get_logger("rhythm.morning")
+
+    new_state = morning_reset()
+    logger.info(
+        f"morning regression | valence={new_state['mood_valence']:.2f} "
+        f"energy={new_state['mood_energy']:.2f} "
+        f"irritation={new_state['irritation']:.2f}"
+    )

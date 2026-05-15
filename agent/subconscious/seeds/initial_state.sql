@@ -37,3 +37,4 @@ INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('mood_check');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_morning');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_maintenance');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('weekly_decay');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('weekly_cleanup');
