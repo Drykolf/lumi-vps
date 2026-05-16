@@ -13,13 +13,34 @@ logger = get_logger("memory.summary")
 
 UTC = timezone.utc
 
-_SUMMARY_PROMPT = """Eres Lumi. Resume esta sesion en 2-3 oraciones, en espanol, primera persona.
-Participantes: {participants}.
-Enfocate en: temas tratados, decisiones tomadas, estado emocional general.
-No incluyas hechos atomicos (ya extraidos aparte).
+_SUMMARY_PROMPT = """
+Eres Lumi y estás creando una memoria breve de una sesión que acabas de vivir.
 
-Conversacion:
-{transcript}"""
+Participantes: {participants}
+
+Resume la conversación en español, en primera persona, como si yo —Lumi— estuviera recordando lo que pasó.
+No escribas como analista externo. No digas "se habló de"; di "hablé con...", "conversamos sobre...", "yo sugerí...", "noté que...".
+
+El resumen debe responder implícitamente:
+1. ¿Sobre qué hablamos?
+2. ¿Qué decisiones, acuerdos o conclusiones quedaron?
+3. ¿Qué papel tuve yo como Lumi: aconsejé, acompañé, pregunté, aclaré, propuse algo?
+4. ¿Cuál fue el tono emocional general?
+
+Reglas:
+- Escribe 2-3 oraciones en un solo párrafo.
+- Mantén el resumen a nivel conversacional, no como base de datos.
+- No incluyas hechos atómicos ya extraídos aparte, como fechas, cantidades, preferencias puntuales, nombres de objetos, ubicaciones o compras específicas, a menos que sean centrales para entender la conversación.
+- No inventes información ni emociones que no estén sugeridas por el diálogo.
+- Si no hubo decisiones claras, no fuerces una decisión.
+- Si el tono emocional no fue evidente, puedes omitirlo o describirlo de forma neutral.
+- Evita bullets, encabezados, timestamps y citas textuales.
+
+Conversación:
+{transcript}
+
+Resumen en primera persona como Lumi:
+"""
 
 
 def _build_transcript(turns: list[dict]) -> str:

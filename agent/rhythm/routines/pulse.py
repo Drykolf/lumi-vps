@@ -17,7 +17,7 @@ async def rhythm_tick():
         if await rhythm_due("mood_check", every_minutes=MOOD_CHECK_MINUTES):
             async with rhythm_task("mood_check"):
                 await mood_check()
-        logger.info("Completed rhythm tick tasks.")
+        #logger.info("Completed rhythm tick tasks.")
 
 
 async def idle_session_check() -> None:

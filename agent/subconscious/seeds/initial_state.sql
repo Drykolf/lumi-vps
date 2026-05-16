@@ -3,8 +3,32 @@
 -- because migrations use INSERT OR IGNORE.
 
 -- Seed Jose
-INSERT OR IGNORE INTO person_interest (person_id, is_jose, interest_score, status)
-VALUES ('jose', 1, 0.70, 'active');
+INSERT OR IGNORE INTO known_persons (
+    person_id,
+    display_name,
+    canonical_name,
+    canonical_name_norm,
+    aliases_json,
+    interest_score,
+    emotional_tone,
+    status,
+    mention_count,
+    notes
+) VALUES (
+    'jose',
+    'Jose Barco',
+    'Jose Barco',
+    'jose barco',
+    '[
+        {"value":"Jose Barco","norm":"jose barco","type":"full_name","confirmed":true,"confidence":1.0},
+        {"value":"Jose","norm":"jose","type":"first_name","confirmed":true,"confidence":1.0}
+    ]',
+    1.00,
+    'positive',
+    'active',
+    1,
+    'Usuario principal de Lumi; prioridad afectiva y contextual máxima.'
+);
 
 -- Seed the internal state row with defaults per mood_policy.md §73-87
 INSERT OR IGNORE INTO lumi_state (key, data)
@@ -27,9 +51,6 @@ VALUES (
 )
 ON CONFLICT(key) DO NOTHING;
 
--- Seed user profile for Jose
-INSERT OR IGNORE INTO user_profiles (user_id, data, updated_at)
-VALUES ('jose', '{"name": "Jose Barco"}', datetime('now'));
 
 -- Seed heartbeat tasks (mandatory rows, status defaults to 'never')
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('rhythm_tick');

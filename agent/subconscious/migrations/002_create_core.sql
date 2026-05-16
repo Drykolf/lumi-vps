@@ -17,66 +17,123 @@ PRAGMA foreign_keys = ON;
 -- ============================================================
 -- Names live in Mem0 (semantic facts) or user_profiles (for Jose).
 -- This table tracks only the relationship dynamic.
-CREATE TABLE IF NOT EXISTS person_interest (
-    person_id        TEXT PRIMARY KEY,                    -- e.g. "jose", "gloria1", "carlos_jefe"
-    is_jose          INTEGER NOT NULL DEFAULT 0,          -- 1 only for the row where person_id="jose"
-    interest_score   REAL    NOT NULL DEFAULT 0.10,
-    emotional_tone   TEXT    NOT NULL DEFAULT 'neutral',  -- positive | neutral | negative | complex
-    status           TEXT    NOT NULL DEFAULT 'active',   -- active | decaying | forgotten | disliked
-    first_seen       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_mentioned   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    mention_count    INTEGER NOT NULL DEFAULT 1,
-    session_delta    REAL    NOT NULL DEFAULT 0.0,        -- accumulated delta this session, reset on close
-    notes            TEXT,                                -- one-line factual note (e.g. reason for dislike)
-    CHECK (interest_score BETWEEN -1.0 AND 1.0),
-    CHECK (emotional_tone IN ('positive','neutral','negative','complex')),
-    CHECK (status IN ('active','decaying','forgotten','disliked')),
-    -- Hard rule: only Jose may exceed 0.69
-    CHECK (is_jose = 1 OR interest_score <= 0.69)
+
+
+CREATE TABLE IF NOT EXISTS known_persons (
+    person_id TEXT PRIMARY KEY,
+
+    display_name TEXT NOT NULL,
+    canonical_name TEXT NOT NULL,
+    canonical_name_norm TEXT NOT NULL,
+
+    aliases_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(aliases_json)),
+
+    interest_score REAL NOT NULL DEFAULT 0.10,
+    emotional_tone TEXT NOT NULL DEFAULT 'neutral',
+    status TEXT NOT NULL DEFAULT 'active',
+
+    first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_mentioned DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+
+    notes TEXT,
+
+    CHECK (interest_score >= -1.0 AND interest_score <= 1.0),
+    CHECK (emotional_tone IN ('positive', 'neutral', 'negative', 'complex')),
+    CHECK (status IN ('active', 'provisional', 'decaying', 'forgotten', 'disliked', 'unknown'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_person_interest_score          ON person_interest(interest_score DESC);
-CREATE INDEX IF NOT EXISTS idx_person_interest_last_mentioned ON person_interest(last_mentioned);
-CREATE INDEX IF NOT EXISTS idx_person_interest_status         ON person_interest(status);
+CREATE INDEX IF NOT EXISTS idx_known_persons_canonical_name_norm
+    ON known_persons(canonical_name_norm);
 
--- ============================================================
--- USER_PROFILES — structured static data about users
--- ============================================================
--- Stores semi-static user info (name, location, language) as JSON.
--- Dynamic facts (projects, preferences, goals) go to Mem0 with metadata.
-CREATE TABLE IF NOT EXISTS user_profiles (
-    user_id    TEXT PRIMARY KEY,
-    data       TEXT NOT NULL,                              -- JSON blob
-    updated_at TEXT NOT NULL
-);
+CREATE INDEX IF NOT EXISTS idx_known_persons_interest_score
+    ON known_persons(interest_score DESC);
 
--- ============================================================
--- RELATIONS — directed connections between THIRD PARTIES
--- ============================================================
--- IMPORTANT: relations are NEVER stored between Lumi and a person.
--- Lumi's stance toward a person is fully captured by:
---   person_interest.score  + person_interest.emotional_tone  + Mem0 memories.
--- This table models Jose's social graph from Lumi's perspective.
+CREATE INDEX IF NOT EXISTS idx_known_persons_status
+    ON known_persons(status);
+
+CREATE INDEX IF NOT EXISTS idx_known_persons_last_mentioned
+    ON known_persons(last_mentioned DESC);
+
 CREATE TABLE IF NOT EXISTS relations (
-    relation_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_person_id   TEXT    NOT NULL,
-    to_person_id     TEXT    NOT NULL,
-    relation_type    TEXT    NOT NULL,    -- family | romantic | friendship | professional | conflict | unknown
-    description      TEXT    NOT NULL,    -- Spanish, e.g. "Gloria es la madre de Jose"
-    inferred         INTEGER NOT NULL DEFAULT 0,  -- 1 if Lumi inferred (only direct family per relation_policy.md)
-    first_mentioned  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_mentioned   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    mention_count    INTEGER NOT NULL DEFAULT 1,
-    CHECK (relation_type IN ('family','romantic','friendship','professional','conflict','unknown')),
+    relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    from_person_id TEXT NOT NULL,
+    to_person_id TEXT NOT NULL,
+
+    relation_type TEXT NOT NULL DEFAULT 'unknown',
+    relation_label TEXT NOT NULL,
+    description TEXT NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'confirmed',
+    confidence REAL NOT NULL DEFAULT 1.0,
+
+    first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_mentioned DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_updated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+
     CHECK (from_person_id != to_person_id),
-    CHECK (from_person_id != 'lumi' AND to_person_id != 'lumi'),  -- enforce: no Lumi relations
-    UNIQUE (from_person_id, to_person_id, relation_type),
-    FOREIGN KEY (from_person_id) REFERENCES person_interest(person_id) ON DELETE CASCADE,
-    FOREIGN KEY (to_person_id)   REFERENCES person_interest(person_id) ON DELETE CASCADE
+    CHECK (relation_type IN (
+        'family',
+        'romantic',
+        'friendship',
+        'professional',
+        'social',
+        'conflict',
+        'identity',
+        'unknown'
+    )),
+    CHECK (status IN (
+        'confirmed',
+        'inferred',
+        'disputed',
+        'rejected',
+        'stale',
+        'unknown'
+    )),
+    CHECK (confidence >= 0.0 AND confidence <= 1.0),
+
+    UNIQUE (from_person_id, to_person_id, relation_label),
+
+    FOREIGN KEY (from_person_id)
+        REFERENCES known_persons(person_id)
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (to_person_id)
+        REFERENCES known_persons(person_id)
+        ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_person_id);
-CREATE INDEX IF NOT EXISTS idx_relations_to   ON relations(to_person_id);
+CREATE INDEX IF NOT EXISTS idx_relations_from_person_id
+    ON relations(from_person_id);
+
+CREATE INDEX IF NOT EXISTS idx_relations_to_person_id
+    ON relations(to_person_id);
+
+CREATE INDEX IF NOT EXISTS idx_relations_pair
+    ON relations(from_person_id, to_person_id);
+
+CREATE INDEX IF NOT EXISTS idx_relations_relation_label
+    ON relations(relation_label);
+
+CREATE INDEX IF NOT EXISTS idx_relations_relation_type
+    ON relations(relation_type);
+
+CREATE INDEX IF NOT EXISTS idx_relations_status
+    ON relations(status);
+
+CREATE INDEX IF NOT EXISTS idx_relations_last_mentioned
+    ON relations(last_mentioned DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_relations_last_updated
+AFTER UPDATE ON relations
+FOR EACH ROW
+BEGIN
+    UPDATE relations
+    SET last_updated = CURRENT_TIMESTAMP
+    WHERE relation_id = OLD.relation_id;
+END;
 
 -- ============================================================
 -- LUMI_STATE — Lumi's own dynamic internal state

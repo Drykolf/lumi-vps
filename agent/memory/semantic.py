@@ -46,10 +46,10 @@ async def add_memory(messages: list[dict], user_id: str) -> list[dict]:
         return []
 
 
-async def search_relevant(user_id: str, query: str, limit: int = 5) -> list[str]:
+async def search_relevant(user_id: str, query: str, limit: int = 5, min_score: float = 0.5) -> list[str]:
     """
     Búsqueda semántica en Mem0. Reemplaza el placeholder de Fase 3.
-    Retorna lista de strings con los hechos más relevantes.
+    Retorna lista de strings con los hechos más relevantes (score >= min_score).
     """
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
@@ -66,7 +66,7 @@ async def search_relevant(user_id: str, query: str, limit: int = 5) -> list[str]
             results = resp.json().get("results", [])
             logger.info(f"search_relevant: query='{query[:80]}' → {len(results)} results{', scores: '+str([round(r.get('score',0),3) for r in results]) if results else ''}")
             #logger.info(f"search_relevant: results={results}")
-            return [r["memory"] for r in results if r.get("memory")]
+            return [r["memory"] for r in results if r.get("memory") and r.get("score", 0) >= min_score]
     except Exception as e:
         logger.warning(f"mem0 search_relevant failed: {e}")
         return []

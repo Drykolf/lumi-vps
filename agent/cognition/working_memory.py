@@ -13,6 +13,30 @@ UTC = timezone.utc
 SOUL_PATH = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
 ATTITUDE_PATH = Path(__file__).parent.parent / "identity" / "attitude.md"
 
+_MEMORY_CHECK_PROMPT = """Extrae todas las menciones explícitas de personas humanas en el mensaje del usuario.
+
+Reglas:
+- Devuelve una lista JSON.
+- Incluye nombres propios, apodos y nombres compuestos.
+- Incluye varias personas si aparecen en el mismo mensaje.
+- No inventes nombres.
+- No resuelvas quién es la persona en la base de datos.
+- No asumas que dos personas con el mismo nombre son la misma persona.
+- Si hay descriptor relacional, inclúyelo: "mamá", "prima", "jefe", "amiga", "de la oficina", etc.
+- Excluye al asistente.
+- Excluye al usuario salvo que el usuario se mencione explícitamente por nombre en tercera persona.
+- Si no hay personas explícitas, devuelve [].
+
+Formato:
+[
+  {
+    "raw_name": "...",
+    "normalized_name": "...",
+    "descriptor": "... | null",
+    "confidence": 0.0-1.0
+  }
+]"""
+
 _cached_prefix = None
 
 def _build_cached_prefix() -> str:
@@ -39,11 +63,6 @@ def get_cached_prefix() -> str:
     if _cached_prefix is None:
         _cached_prefix = _build_cached_prefix()
     return _cached_prefix
-_MEMORY_CHECK_PROMPT = """Detecta si este mensaje menciona a otras personas ademas del usuario que habla.
-Ignora referencias al propio usuario o a Lumi.
-Responde SOLO con JSON en una linea:
-{"entities_found": true/false, "entities": [{"name": "Nombre", "hint": "rol o contexto breve (ej: madre, jefe, amigo)"}]}
-Si no se mencionan terceras personas, entities_found=false y entities=[]."""
 
 async def _memory_check(message: str, sid: str) -> dict:
     """Lightweight LLM call to detect third-party entities. ~200 tokens."""
@@ -91,7 +110,7 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
     if relevant_memories:
         parts.append("[Memorias relevantes sobre el usuario]\n" + "\n".join("- " + m for m in relevant_memories))
 
-    info = get_user_information(user_id)
+    """info = get_user_information(user_id)
     if info["interest"] is None:
         create_person_interest(user_id)
         set_user_information(user_id, profile={})
@@ -110,7 +129,7 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
             f"status={pi['status']} | "
             f"mentions={pi['mention_count']}"
         )
-
+"""
     # TODO: Entity resolution for third-party persons (pending — needs _memory_check wired)
     # See plan.md for implementation details.
 
