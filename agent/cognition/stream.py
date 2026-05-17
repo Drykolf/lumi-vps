@@ -7,8 +7,8 @@ import json
 from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream
-from agent.cognition.working_memory import build_messages
-from agent.memory import save_turn, init_databases, record_turn, generate_summary, reset_turns
+from agent.cognition.working_memory import build_messages, _entities_check
+from agent.memory import save_turn, init_databases, record_turn, generate_summary, reset_turns, add_mention
 from agent.affect import init_state_table
 from agent.substrate.logger import get_logger
 
@@ -35,9 +35,14 @@ def _maybe_summarize(sid: str, user_id: str):
         asyncio.create_task(_run_summary(sid))
 
 
-def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str):
-    save_turn(user_id, "user", message, sid)
+def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entities: list[dict] | None = None):
+    history_id = save_turn(user_id, "user", message, sid)
     save_turn(user_id, "assistant", reply_text, sid)
+
+    if entities:
+        for entity in entities:
+            add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
+
     _maybe_summarize(sid, user_id)
 
 
@@ -62,7 +67,9 @@ async def cycle(user_id: str, message: str, metadata: dict):
         yield reply
         return
 
-    messages = await build_messages(user_id, message, metadata)
+    entities = await _entities_check(message, sid, user_id)
+
+    messages = await build_messages(user_id, message, metadata, entities=entities)
 
     tool, args = await intention.decide_tool(sid, message)
     if tool and args is not None:
@@ -81,7 +88,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
         full_reply += chunk
         yield chunk
 
-    _finalize_turn(user_id, message, full_reply, sid)
+    _finalize_turn(user_id, message, full_reply, sid, entities=entities)
 
 
 async def run_stream(user_id: str, message: str, metadata: dict):

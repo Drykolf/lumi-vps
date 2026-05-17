@@ -62,3 +62,57 @@ CREATE INDEX IF NOT EXISTS idx_heartbeat_runs_task_started
 
 CREATE INDEX IF NOT EXISTS idx_heartbeat_runs_status
     ON heartbeat_runs(status);
+
+-- ============================================================
+-- PERSON_MENTIONS — per-turn entity mention tracking
+-- ============================================================
+CREATE TABLE IF NOT EXISTS person_mentions (
+    mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    history_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    source_role TEXT NOT NULL DEFAULT 'user',
+    raw_text TEXT NOT NULL,
+    mention_type TEXT NOT NULL,
+    raw_name TEXT,
+    normalized_name TEXT,
+    descriptor TEXT,
+    relation_label_hint TEXT,
+    anchor TEXT,
+    confidence REAL NOT NULL DEFAULT 1.0,
+    extractor_json TEXT,
+    resolution_status TEXT NOT NULL DEFAULT 'unresolved',
+    resolved_person_id TEXT,
+    candidates_json TEXT,
+    consolidation_status TEXT NOT NULL DEFAULT 'pending',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME,
+    consolidated_at DATETIME,
+
+    CHECK (confidence >= 0.0 AND confidence <= 1.0),
+    CHECK (resolution_status IN (
+        'unresolved',
+        'resolved',
+        'candidate_unconfirmed',
+        'ambiguous',
+        'unknown',
+        'rejected'
+    )),
+    CHECK (consolidation_status IN (
+        'pending',
+        'consolidated',
+        'skipped',
+        'needs_review'
+    )),
+
+    FOREIGN KEY (history_id) REFERENCES history(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_person_mentions_session
+    ON person_mentions(session_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_person_mentions_user
+    ON person_mentions(user_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_person_mentions_resolution
+    ON person_mentions(resolution_status);

@@ -72,6 +72,51 @@ async def search_relevant(user_id: str, query: str, limit: int = 5, min_score: f
         return []
 
 
+async def search_person_relevant(
+    user_id: str,
+    person_id: str,
+    query: str,
+    limit: int = 5,
+    min_score: float = 0.5,
+    return_raw: bool = False,
+) -> list[str] | list[dict]:
+    """
+    Busqueda semantica en Mem0 filtrada a metadata.person_id.
+    Para obtener hechos relevantes sobre una persona especifica.
+    Retorna lista de strings o dicts segun return_raw.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.post(
+                f"{MEM0_URL}/search",
+                headers=_headers(),
+                json={
+                    "query": query,
+                    "filters": {
+                        "user_id": user_id,
+                        "metadata.person_id": person_id,
+                    },
+                    "top_k": limit,
+                },
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            logger.info(
+                f"search_person_relevant: person={person_id} "
+                f"query='{query[:60]}' -> {len(results)} results"
+            )
+            if return_raw:
+                return [r for r in results if r.get("score", 0) >= min_score]
+            return [
+                r["memory"]
+                for r in results
+                if r.get("memory") and r.get("score", 0) >= min_score
+            ]
+    except Exception as e:
+        logger.warning(f"mem0 search_person_relevant failed: {e}")
+        return []
+
+
 async def save_explicit(content: str, user_id: str, category: str = "note") -> dict:
     """
     Guarda contenido verbatim sin pasar por el extractor LLM.

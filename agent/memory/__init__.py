@@ -16,6 +16,7 @@ from agent.memory.episodic import (
     save_turn,
     get_history,
     get_session_turns,
+    get_recent_session_history,
     mark_summarized,
     get_unmood_evaluated,
     mark_mood_evaluated,
@@ -24,6 +25,7 @@ from agent.memory.episodic import (
 )
 from agent.memory.semantic import (
     search_relevant,
+    search_person_relevant,
     add_memory,
     save_explicit,
 )
@@ -42,10 +44,31 @@ from agent.memory.mindstream.social import (
     add_relation,
     infer_family_relations,
     find_user_id_by_name,
+    get_known_person,
+    ensure_known_person,
+    update_known_person,
+    increment_person_mention,
+    list_active_known_persons,
+    normalize_name,
+    parse_aliases,
+    build_alias,
+    add_person_alias,
+    find_person_candidates_by_name,
+    resolve_person_mention,
+    find_related_persons,
+    PersonMention,
+    PersonCandidate,
+    PersonResolution,
+    ResolutionStatus,
 )
 from agent.memory.mindstream.session import record_turn, get_session_users, reset_turns, get_stale_sessions
 from agent.memory.mindstream.consolidation import generate_summary, get_recent_summaries
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_summaries, cleanup_heartbeat_runs, run_all_cleanups
+from agent.memory.mindstream.mentions import (
+    add_mention,
+    get_recent_mentions,
+    get_user_mentions,
+)
 
 # Backward compat alias
 get_profile = get_user_information
@@ -56,12 +79,14 @@ __all__ = [
     "save_turn",
     "get_history",
     "get_session_turns",
+    "get_recent_session_history",
     "mark_summarized",
     "get_unmood_evaluated",
     "mark_mood_evaluated",
     "get_unmemory_evaluated",
     "mark_memory_evaluated",
     "search_relevant",
+    "search_person_relevant",
     "add_memory",
     "get_user_information",
     "set_user_information",
@@ -75,6 +100,22 @@ __all__ = [
     "add_relation",
     "infer_family_relations",
     "find_user_id_by_name",
+    "get_known_person",
+    "ensure_known_person",
+    "update_known_person",
+    "increment_person_mention",
+    "list_active_known_persons",
+    "normalize_name",
+    "parse_aliases",
+    "build_alias",
+    "add_person_alias",
+    "find_person_candidates_by_name",
+    "resolve_person_mention",
+    "find_related_persons",
+    "PersonMention",
+    "PersonCandidate",
+    "PersonResolution",
+    "ResolutionStatus",
     "record_turn",
     "get_session_users",
     "reset_turns",
@@ -85,4 +126,7 @@ __all__ = [
     "cleanup_summaries",
     "cleanup_heartbeat_runs",
     "run_all_cleanups",
+    "add_mention",
+    "get_recent_mentions",
+    "get_user_mentions",
 ]

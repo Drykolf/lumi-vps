@@ -3,7 +3,7 @@ CoreRepository — SQLite database for Lumi's internal state and social graph.
 Database: data/core.db
 Migration: 002_create_core.sql
 Seeds: seeds/initial_state.sql
-Tables: person_interest, user_profiles, relations, lumi_state, skill_proposals
+Tables: known_persons, relations, lumi_state, skill_proposals
 """
 import sqlite3
 from pathlib import Path

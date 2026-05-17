@@ -15,15 +15,17 @@ def init_db():
     traces.init()
 
 
-def save_turn(user_id: str, role: str, content: str, session_id: str = "default"):
-    """Guarda un turno de conversacion en SQLite."""
+def save_turn(user_id: str, role: str, content: str, session_id: str = "default") -> int:
+    """Guarda un turno de conversacion en SQLite. Retorna el history_id."""
     conn = traces.get_conn()
-    conn.execute(
+    cur = conn.execute(
         "INSERT INTO history (user_id, role, content, session_id, ts) VALUES (?, ?, ?, ?, ?)",
         (user_id, role, content, session_id, datetime.now(UTC).isoformat())
     )
     conn.commit()
+    history_id = cur.lastrowid
     conn.close()
+    return history_id
 
 
 def get_history(user_id: str, limit: int = 10) -> list[dict]:
@@ -104,6 +106,29 @@ def get_unmemory_evaluated(since_ts: str, limit: int = 500) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_recent_session_history(session_id: str, include_summarized: bool = False,
+                                limit: int = 10) -> list[dict]:
+    """Retorna los ultimos N turnos de una sesion, en orden cronologico.
+    A diferencia de get_session_turns (que devuelve los primeros N ascendentes),
+    esta devuelve los ultimos N (los mas recientes)."""
+    conn = traces.get_conn()
+    columns = "role, content, user_id"
+    where = f"session_id = ?{' AND summarized = 0' if not include_summarized else ''}"
+
+    # Abrimos el subquery y añadimos 'id' en la selección interna para poder ordenar afuera
+    rows = conn.execute(
+        f"""SELECT role, content, user_id FROM (
+                SELECT id, {columns} FROM history
+                WHERE {where}
+                ORDER BY id DESC
+                LIMIT ?
+            ) ORDER BY id ASC""",
+        (session_id, limit),
+    ).fetchall()
+    conn.close()
+    return [{"role": r[0], "content": r[1], "user_id": r[2]} for r in rows]
 
 
 def mark_memory_evaluated(max_id: int):
