@@ -112,21 +112,24 @@ async def test_models(reasoning_effort="default") -> dict:
 
 async def chat(messages, tool_schemas=None, max_tokens=512,
                temperature: float = 0.7, reasoning_effort: str | None = None,
-               model_group: ModelGroup = ModelGroup.MAIN) -> dict:
+               model_group: ModelGroup = ModelGroup.MAIN,
+               prompt_cache_key: str | None = None) -> dict:
     return await _try_models("chat", model_group=model_group, messages=messages,
                               tool_schemas=tool_schemas, max_tokens=max_tokens,
                               temperature=temperature,
-                              reasoning_effort=reasoning_effort)
+                              reasoning_effort=reasoning_effort,
+                              prompt_cache_key=prompt_cache_key)
 
 
 async def chat_stream(messages, tool_schemas=None,
                       temperature: float = 0.7, reasoning_effort: str | None = None,
-                      model_group: ModelGroup = ModelGroup.MAIN):
+                      model_group: ModelGroup = ModelGroup.MAIN,
+                      prompt_cache_key: str | None = None):
     # chat_stream es async generator — necesita manejo especial
     for llm_instance in _resolve_models(model_group):
         for attempt in range(2):
             try:
-                async for chunk in llm_instance.chat_stream(messages, tool_schemas, temperature, reasoning_effort):
+                async for chunk in llm_instance.chat_stream(messages, tool_schemas, temperature, reasoning_effort, prompt_cache_key):
                     yield chunk
                 return
             except RateLimitError:

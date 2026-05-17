@@ -37,7 +37,7 @@ class Qwen9B(BaseLLM):
             kwargs["tool_choice"] = "auto"
         return kwargs
 
-    async def chat(self, messages, tool_schemas=None, max_tokens=512, temperature=0.7, reasoning_effort=None) -> dict:
+    async def chat(self, messages, tool_schemas=None, max_tokens=512, temperature=0.7, reasoning_effort=None, prompt_cache_key=None) -> dict:
         response = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, max_tokens, stream=False, temperature=temperature, reasoning_effort=reasoning_effort)
         )
@@ -47,7 +47,7 @@ class Qwen9B(BaseLLM):
         msg = response.choices[0].message
         return {"role": msg.role, "content": msg.content or "", "tool_calls": msg.tool_calls or []}
 
-    async def chat_stream(self, messages, tool_schemas=None, temperature=0.7, reasoning_effort=None):
+    async def chat_stream(self, messages, tool_schemas=None, temperature=0.7, reasoning_effort=None, prompt_cache_key=None):
         stream = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, 512, stream=True, temperature=temperature, reasoning_effort=reasoning_effort)
         )

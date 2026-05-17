@@ -16,6 +16,7 @@ class BaseLLM(ABC):
         max_tokens: int = 512,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        prompt_cache_key: str | None = None,
     ) -> dict:
         """
         Retorna dict con keys: role, content, tool_calls.
@@ -29,6 +30,7 @@ class BaseLLM(ABC):
         tool_schemas: list[dict] = None,
         temperature: float = 0.7,
         reasoning_effort: str | None = None,
+        prompt_cache_key: str | None = None,
     ):
         """
         Async generator que yield chunks de texto.

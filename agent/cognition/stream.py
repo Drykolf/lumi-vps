@@ -3,6 +3,7 @@ Core orchestrator — clasificar → handler → contexto → tools → LLM → 
 """
 import asyncio
 import json
+import os
 
 from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
@@ -18,6 +19,10 @@ logger = get_logger("agent.core")
 init_databases()
 init_state_table()
 logger.info("core orchestrator initialized")
+
+CACHE_KEY_CHAT = os.getenv("PROMPT_CACHE_KEY_CHAT")
+CACHE_KEY_TOOL = os.getenv("PROMPT_CACHE_KEY_TOOL")
+CACHE_KEY_ENTITY = os.getenv("PROMPT_CACHE_KEY_ENTITY")
 
 
 def _get_sid(metadata: dict) -> str:
@@ -69,11 +74,11 @@ async def cycle(user_id: str, message: str, metadata: dict):
         yield reply
         return
 
-    entities = await _entities_check(message, sid, user_id)
+    entities = await _entities_check(message, sid, user_id, prompt_cache_key=CACHE_KEY_ENTITY)
 
     messages = await build_messages(user_id, message, metadata, entities=entities)
 
-    tool, args = await intention.decide_tool(sid, message)
+    tool, args = await intention.decide_tool(sid, message, prompt_cache_key=CACHE_KEY_TOOL)
     if tool and args is not None:
         tool_call = [{"function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}]
         tool_results = await intention.execute(tool_call, user_id)
@@ -86,7 +91,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
             messages.append({"role": "tool", "tool_call_id": "call_1", "content": str(r.get("result", ""))})
 
     full_reply = ""
-    async for chunk in chat_stream(messages):
+    async for chunk in chat_stream(messages, prompt_cache_key=CACHE_KEY_CHAT):
         full_reply += chunk
         yield chunk
 

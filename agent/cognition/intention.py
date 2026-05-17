@@ -29,7 +29,7 @@ def has_tool_calls(message: dict) -> bool:
 
 # ── Lightweight tool check ─────────────────────────────────────────────────────
 
-async def _tool_check(sid: str, message: str) -> str | None:
+async def _tool_check(sid: str, message: str, prompt_cache_key: str | None = None) -> str | None:
     """Returns tool name if one is needed, None otherwise. ~500 tokens."""
     all_schemas_ = all_schemas()
     if not all_schemas_:
@@ -127,6 +127,7 @@ async def _tool_check(sid: str, message: str) -> str | None:
             temperature=0.1,
             reasoning_effort="none",
             model_group=ModelGroup.LIGHTWEIGHT,
+            prompt_cache_key=prompt_cache_key,
         )
         content = response.get("content", "").strip()
         logger.info(f"[tool_check] response: {content}")
@@ -140,7 +141,7 @@ async def _tool_check(sid: str, message: str) -> str | None:
     return None
 
 
-async def _formulate_query(message: str, tool_name: str, sid: str) -> dict | None:
+async def _formulate_query(message: str, tool_name: str, sid: str, prompt_cache_key: str | None = None) -> dict | None:
     """Lightweight: generate tool arguments from conversation context. ~200 tokens."""
     all_schemas_ = all_schemas()
     schema = next((s for s in all_schemas_ if s["function"]["name"] == tool_name), None)
@@ -183,6 +184,7 @@ async def _formulate_query(message: str, tool_name: str, sid: str) -> dict | Non
             temperature=0.1,
             reasoning_effort="none",
             model_group=ModelGroup.LIGHTWEIGHT,
+            prompt_cache_key=prompt_cache_key,
         )
         content = response.get("content", "").strip()
         logger.info(f"[formulate_query] {tool_name} → {content[:100]}")
@@ -200,11 +202,11 @@ async def _formulate_query(message: str, tool_name: str, sid: str) -> dict | Non
     return None
 
 
-async def decide_tool(sid: str, message: str) -> tuple[str | None, dict | None]:
+async def decide_tool(sid: str, message: str, prompt_cache_key: str | None = None) -> tuple[str | None, dict | None]:
     """One-stop: check if tool needed + generate args. Returns (tool_name, args)."""
-    tool = await _tool_check(sid, message)
+    tool = await _tool_check(sid, message, prompt_cache_key=prompt_cache_key)
     if tool:
-        args = await _formulate_query(message, tool, sid)
+        args = await _formulate_query(message, tool, sid, prompt_cache_key=prompt_cache_key)
         return tool, args
     return None, None
 

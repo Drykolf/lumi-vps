@@ -73,7 +73,7 @@ def get_cached_prefix() -> str:
         _cached_prefix = _build_cached_prefix()
     return _cached_prefix
 
-async def _entities_check(message: str, sid: str, user_id: str) -> list[dict]:
+async def _entities_check(message: str, sid: str, user_id: str, prompt_cache_key: str | None = None) -> list[dict]:
     """Lightweight LLM call to detect third-party entities in user message. ~200 tokens."""
     default = []
 
@@ -94,6 +94,7 @@ async def _entities_check(message: str, sid: str, user_id: str) -> list[dict]:
             temperature=0.1,
             reasoning_effort="none",
             model_group=ModelGroup.LIGHTWEIGHT,
+            prompt_cache_key=prompt_cache_key,
         )
         content = response.get("content", "").strip()
         logger.info(f"[entities_check] response: {content}")
