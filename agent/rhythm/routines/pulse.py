@@ -3,7 +3,7 @@ Frequent rhythm tick — every 15 minutes.
 Handles idle sessions, pending summaries, mood evaluations, and catch-up.
 """
 from agent.rhythm.state import rhythm_task, rhythm_due
-from agent.rhythm.cadence import MOOD_CHECK_MINUTES
+from agent.rhythm.cadence import MOOD_CHECK_MINUTES, MOOD_IDLE_DECAY_MINUTES
 from agent.substrate.logger import get_logger
 logger = get_logger("rhythm.pulse")
 
@@ -47,6 +47,8 @@ async def process_pending_mood_evaluations() -> None:
 
 async def mood_check() -> None:
     """Hourly mood evaluation: idle decay or LLM contextual evaluation.
+    Idle decay only triggers after MOOD_IDLE_DECAY_MINUTES of inactivity.
+    Uses actual elapsed idle time as input to the decay formula.
     Saves updated state to core.db, marks history rows as mood_evaluated."""
     from datetime import datetime, timezone, timedelta
     from agent.affect import get_state, idle_decay, evaluate_mood, write_state, check_emotional_honesty_mode
@@ -61,12 +63,21 @@ async def mood_check() -> None:
     current = get_state()
 
     if not messages:
-        new_state = idle_decay(current, MOOD_CHECK_MINUTES)
-        logger.info("[mood_check] idle decay applied | no new messages in window")
+        last_at = current.get("last_interaction_at")
+        if last_at:
+            last_dt = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
+            elapsed = (now - last_dt).total_seconds() / 60.0
+        else:
+            elapsed = MOOD_IDLE_DECAY_MINUTES
+
+        if elapsed >= MOOD_IDLE_DECAY_MINUTES:
+            new_state = idle_decay(current, elapsed)
+            # logger.info(f"[mood_check] idle decay applied | idle_mins={elapsed:.0f}")
+        else:
+            new_state = current
     else:
         # TODO: Add persons interest and profile of everyone involved
         new_state, reasoning = await evaluate_mood(messages, current)
-        #logger.info(f"[mood_check] LLM eval {new_state} | reasoning={reasoning[:120]}")
         max_id = max(m["id"] for m in messages)
         mark_mood_evaluated(max_id)
         logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:120]}")

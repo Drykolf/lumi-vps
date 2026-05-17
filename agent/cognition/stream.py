@@ -9,7 +9,7 @@ from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream
 from agent.cognition.working_memory import build_messages, _entities_check
 from agent.memory import save_turn, init_databases, record_turn, generate_summary, reset_turns, add_mention
-from agent.affect import init_state_table
+from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.core")
@@ -38,6 +38,8 @@ def _maybe_summarize(sid: str, user_id: str):
 def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entities: list[dict] | None = None):
     history_id = save_turn(user_id, "user", message, sid)
     save_turn(user_id, "assistant", reply_text, sid)
+
+    touch_last_interaction()
 
     if entities:
         for entity in entities:

@@ -45,11 +45,11 @@ IDLE_CAPS = {
 
 # Per-hour delta rates (positive = increase, negative = decrease)
 IDLE_RATES = {
-    "mood_valence": -0.01,
-    "mood_energy": -0.01,
-    "irritation": -0.03,
-    "focus_level": -0.005,
-    "presence_need": 0.02,
+    "mood_valence": -0.0025,
+    "mood_energy": -0.0025,
+    "irritation": -0.0075,
+    "focus_level": -0.00125,
+    "presence_need": 0.005,
 }
 
 

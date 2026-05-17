@@ -129,6 +129,15 @@ def apply_deltas(**deltas: float) -> dict:
     return state
 
 
+def touch_last_interaction(meaningful: bool = False):
+    state = get_state()
+    now = datetime.now(UTC).isoformat()
+    state["last_interaction_at"] = now
+    if meaningful:
+        state["last_meaningful_interaction_at"] = now
+    _write_state(state)
+
+
 def morning_reset():
     """Daily regression toward baseline per mood_policy.md §329-352.
     Constants: irritation 60%→0.0, energy 50%→0.6, valence 40%→0.3,
