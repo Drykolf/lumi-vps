@@ -72,7 +72,7 @@ async def mood_check() -> None:
 
         if elapsed >= MOOD_IDLE_DECAY_MINUTES:
             new_state = idle_decay(current, elapsed)
-            # logger.info(f"[mood_check] idle decay applied | idle_mins={elapsed:.0f}")
+            logger.info(f"[mood_check] idle decay applied | idle_mins={elapsed:.0f}")
         else:
             new_state = current
     else:

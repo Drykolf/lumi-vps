@@ -28,34 +28,6 @@ def save_turn(user_id: str, role: str, content: str, session_id: str = "default"
     return history_id
 
 
-def get_history(user_id: str, limit: int = 10) -> list[dict]:
-    """Retorna los ultimos N turnos de conversacion desde SQLite."""
-    conn = traces.get_conn()
-    rows = conn.execute(
-        "SELECT role, content FROM history WHERE user_id = ? AND summarized = 0 ORDER BY id DESC LIMIT ?",
-        (user_id, limit)
-    ).fetchall()
-    conn.close()
-    return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
-
-
-def get_session_turns(session_id: str, include_summarized: bool = False,
-                      limit: int = 0) -> list[dict]:
-    """Retorna los turnos de una sesion, en orden cronologico.
-    include_summarized=True incluye turnos ya resumidos.
-    limit=0 significa ilimitado."""
-    conn = traces.get_conn()
-    columns = "role, content, user_id"
-    where = f"session_id = ?{' AND summarized = 0' if not include_summarized else ''}"
-    limit_sql = f"LIMIT {limit}" if limit else ""
-    rows = conn.execute(
-        f"SELECT {columns} FROM history WHERE {where} ORDER BY id ASC {limit_sql}",
-        (session_id,)
-    ).fetchall()
-    conn.close()
-    return [{"role": r[0], "content": r[1], "user_id": r[2]} for r in rows]
-
-
 def mark_summarized(session_id: str):
     """Marca como resumidos todos los turnos no resumidos de una sesion."""
     conn = traces.get_conn()
@@ -108,27 +80,74 @@ def get_unmemory_evaluated(since_ts: str, limit: int = 500) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_recent_session_history(session_id: str, include_summarized: bool = False,
-                                limit: int = 10) -> list[dict]:
-    """Retorna los ultimos N turnos de una sesion, en orden cronologico.
-    A diferencia de get_session_turns (que devuelve los primeros N ascendentes),
-    esta devuelve los ultimos N (los mas recientes)."""
+def get_recent_session_log(session_id: str, include_summarized: bool = False,
+                           since_ts: str | None = None, limit: int = 0) -> list[dict]:
+    """Retorna los turnos de una sesion, en orden cronologico.
+    include_summarized=True incluye turnos ya resumidos.
+    since_ts (ISO UTC) filtra desde esa marca temporal.
+    limit=0 significa ilimitado; limit>0 retorna los ultimos N."""
     conn = traces.get_conn()
-    columns = "role, content, user_id"
+    columns = "role, content, user_id, ts"
     where = f"session_id = ?{' AND summarized = 0' if not include_summarized else ''}"
+    params = [session_id]
 
-    # Abrimos el subquery y añadimos 'id' en la selección interna para poder ordenar afuera
+    if since_ts:
+        where += " AND ts >= ?"
+        params.append(since_ts)
+
+    if limit:
+        rows = conn.execute(
+            f"""SELECT role, content, user_id, ts FROM (
+                    SELECT id, {columns} FROM history
+                    WHERE {where}
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC""",
+            params + [limit],
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT {columns} FROM history WHERE {where} ORDER BY id ASC",
+            params,
+        ).fetchall()
+
+    conn.close()
+    return [{"role": r[0], "content": r[1], "user_id": r[2], "ts": r[3]} for r in rows]
+
+
+def get_recent_user_log(user_id: str, since_ts: str | None = None,
+                         exclude_session_id: str | None = None,
+                         include_summarized: bool = False,
+                         limit: int = 10) -> list[dict]:
+    """Retorna los ultimos turnos de un usuario a traves de sesiones.
+    since_ts (ISO UTC) filtra desde esa marca temporal.
+    exclude_session_id excluye una sesion especifica (para cross-session).
+    Retorna role, content, session_id, ts en orden cronologico."""
+    conn = traces.get_conn()
+    columns = "role, content, session_id, ts"
+    where = f"user_id = ?{' AND summarized = 0' if not include_summarized else ''}"
+    params = [user_id]
+
+    if since_ts:
+        where += " AND ts >= ?"
+        params.append(since_ts)
+
+    if exclude_session_id:
+        where += " AND session_id != ?"
+        params.append(exclude_session_id)
+
     rows = conn.execute(
-        f"""SELECT role, content, user_id FROM (
+        f"""SELECT role, content, session_id, ts FROM (
                 SELECT id, {columns} FROM history
                 WHERE {where}
                 ORDER BY id DESC
                 LIMIT ?
             ) ORDER BY id ASC""",
-        (session_id, limit),
+        params + [limit],
     ).fetchall()
+
     conn.close()
-    return [{"role": r[0], "content": r[1], "user_id": r[2]} for r in rows]
+    return [{"role": r[0], "content": r[1], "session_id": r[2], "ts": r[3]} for r in rows]
 
 
 def mark_memory_evaluated(max_id: int):

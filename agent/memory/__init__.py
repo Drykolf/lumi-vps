@@ -9,14 +9,13 @@ Underlying implementations:
   agent/memory/mindstream/consolidation.py  — generacion LLM de resumenes de sesion (traces.db)
 
 Usage:
-    from agent.memory import get_history, save_turn, add_memory, ...
+    from agent.memory import get_recent_user_log, save_turn, add_memory, ...
 """
 from agent.subconscious import init_databases
 from agent.memory.episodic import (
     save_turn,
-    get_history,
-    get_session_turns,
-    get_recent_session_history,
+    get_recent_session_log,
+    get_recent_user_log,
     mark_summarized,
     get_unmood_evaluated,
     mark_mood_evaluated,
@@ -77,9 +76,8 @@ __all__ = [
     "init_databases",
     "init_core_db",
     "save_turn",
-    "get_history",
-    "get_session_turns",
-    "get_recent_session_history",
+    "get_recent_session_log",
+    "get_recent_user_log",
     "mark_summarized",
     "get_unmood_evaluated",
     "mark_mood_evaluated",

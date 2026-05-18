@@ -5,7 +5,7 @@ Stores in traces.db: session_summaries table.
 import json
 from datetime import datetime, timezone
 from agent.subconscious import traces
-from agent.memory.episodic import get_session_turns, mark_summarized
+from agent.memory.episodic import get_recent_session_log, mark_summarized
 from agent.memory.mindstream.session import get_session_users
 from agent.substrate.logger import get_logger
 
@@ -57,7 +57,7 @@ async def generate_summary(session_id: str) -> str | None:
     summary, stores it in session_summaries, and marks the turns as summarized.
     Returns the summary text or None if no turns to summarize.
     """
-    turns = get_session_turns(session_id)
+    turns = get_recent_session_log(session_id)
     if not turns:
         logger.info(f"[summary] no unsummarized turns for session={session_id}")
         return None
