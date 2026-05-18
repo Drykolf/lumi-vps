@@ -1,9 +1,10 @@
 -- LUMI traces.db
--- Conversation history, session tracking, and session summaries.
+-- Conversation history, session tracking, and daily diary.
 -- This is the SOURCE OF TRUTH for:
 --   * Sequential conversation turns (history)
 --   * Per-session turn counters (session_turns)
---   * LLM-generated session summaries (session_summaries)
+--   * Lumi's daily diary entries (diary)
+--   * Mood state time-series (mood_logs)
 --
 -- Separate from core.db (person_interest, lumi_state, etc.) by design —
 -- this is sequential/chronological, not semantic.
@@ -35,14 +36,43 @@ CREATE TABLE IF NOT EXISTS session_turns (
     last_turn_at TEXT
 );
 
-CREATE TABLE IF NOT EXISTS session_summaries (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_ids   TEXT NOT NULL,
-    summary    TEXT NOT NULL,
-    created_at TEXT NOT NULL
+-- ============================================================
+-- DIARY — Lumi's narrative log
+-- ============================================================
+-- Topic-thread-level entries produced by the nightly consolidation cron.
+-- One row per coherent topic identified by the LLM during the period window.
+-- Replaces the previous session_summaries table.
+--
+-- entry_type allows future extensions:
+--   'daily_thread'  — produced by generate_daily_diary (current)
+--   'introspection' — reserved for weekly self-reflection (future)
+--   'milestone'     — reserved for relational milestones (future)
+
+CREATE TABLE IF NOT EXISTS diary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    period_start TEXT NOT NULL,           -- UTC ISO-8601, batch window start
+    period_end   TEXT NOT NULL,           -- UTC ISO-8601, batch window end
+
+    talked_at_ts        TEXT NOT NULL,    -- UTC ISO-8601, representative moment of the thread
+    thread_span_minutes INTEGER,          -- duration of the thread, NULL if single-turn
+    user_ids            TEXT NOT NULL,    -- JSON array of human participants
+    topic_label         TEXT,             -- short snake_case tag
+    summary             TEXT NOT NULL,    -- first-person paragraph in Colombian neutral Spanish
+
+    lumi_state TEXT CHECK (lumi_state IS NULL OR json_valid(lumi_state)),
+        -- JSON: mood snapshot from mood_logs closest to talked_at_ts
+
+    entry_type TEXT NOT NULL DEFAULT 'daily_thread',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+
+    CHECK (entry_type IN ('daily_thread', 'introspection', 'milestone'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_summaries_user ON session_summaries(user_ids);
+CREATE INDEX IF NOT EXISTS idx_diary_period_end ON diary(period_end DESC);
+CREATE INDEX IF NOT EXISTS idx_diary_talked_at  ON diary(talked_at_ts DESC);
+CREATE INDEX IF NOT EXISTS idx_diary_topic      ON diary(topic_label);
+CREATE INDEX IF NOT EXISTS idx_diary_type_end   ON diary(entry_type, period_end DESC);
 
 -- ============================================================
 -- HEARTBEAT_RUNS — execution log for scheduled tasks
@@ -133,6 +163,14 @@ CREATE TABLE IF NOT EXISTS mood_logs (
     state_label TEXT NOT NULL,
     emotional_honesty_mode INTEGER NOT NULL,
     note TEXT,
+    CHECK (trigger_source IN (
+        'mood_check',
+        'session_close',
+        'morning_regression',
+        'idle_decay',
+        'event',
+        'manual'
+    )),
     CHECK (mood_valence >= -1.0 AND mood_valence <= 1.0),
     CHECK (mood_energy >= 0.0 AND mood_energy <= 1.0),
     CHECK (irritation >= 0.0 AND irritation <= 1.0),

@@ -24,17 +24,6 @@ def cleanup_history(days: int = 15) -> int:
     return deleted
 
 
-def cleanup_summaries(days: int = 30) -> int:
-    cutoff = _cutoff(days)
-    conn = traces.get_conn()
-    cursor = conn.execute("DELETE FROM session_summaries WHERE created_at < ?", (cutoff,))
-    deleted = cursor.rowcount
-    conn.commit()
-    conn.close()
-    logger.info(f"session_summaries cleanup | deleted={deleted} | cutoff_before_{days}d")
-    return deleted
-
-
 def cleanup_heartbeat_runs(days: int = 7) -> int:
     cutoff = _cutoff(days)
     conn = traces.get_conn()
@@ -46,9 +35,20 @@ def cleanup_heartbeat_runs(days: int = 7) -> int:
     return deleted
 
 
+def cleanup_mood_logs(days: int = 7) -> int:
+    cutoff = _cutoff(days)
+    conn = traces.get_conn()
+    cursor = conn.execute("DELETE FROM mood_logs WHERE ts < ?", (cutoff,))
+    deleted = cursor.rowcount
+    conn.commit()
+    conn.close()
+    logger.info(f"mood_logs cleanup | deleted={deleted} | cutoff_before_{days}d")
+    return deleted
+
+
 def run_all_cleanups() -> dict[str, int]:
     return {
         "history": cleanup_history(),
-        "session_summaries": cleanup_summaries(),
+        "mood_logs": cleanup_mood_logs(),
         "heartbeat_runs": cleanup_heartbeat_runs(),
     }

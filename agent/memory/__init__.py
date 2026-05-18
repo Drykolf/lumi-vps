@@ -22,6 +22,8 @@ from agent.memory.episodic import (
     get_unmemory_evaluated,
     mark_memory_evaluated,
     add_mood_log,
+    write_diary_entry,
+    read_recent_diary_entries,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -62,8 +64,8 @@ from agent.memory.mindstream.social import (
     ResolutionStatus,
 )
 from agent.memory.mindstream.session import record_turn, get_session_users, reset_turns, get_stale_sessions
-from agent.memory.mindstream.consolidation import generate_summary, get_recent_summaries
-from agent.memory.mindstream.cleanup import cleanup_history, cleanup_summaries, cleanup_heartbeat_runs, run_all_cleanups
+from agent.memory.mindstream.consolidation import generate_daily_diary
+from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
     add_mention,
     get_recent_mentions,
@@ -119,14 +121,15 @@ __all__ = [
     "get_session_users",
     "reset_turns",
     "get_stale_sessions",
-    "generate_summary",
-    "get_recent_summaries",
+    "generate_daily_diary",
     "cleanup_history",
-    "cleanup_summaries",
+    "cleanup_mood_logs",
     "cleanup_heartbeat_runs",
     "run_all_cleanups",
     "add_mention",
     "get_recent_mentions",
     "get_user_mentions",
     "add_mood_log",
+    "write_diary_entry",
+    "read_recent_diary_entries",
 ]

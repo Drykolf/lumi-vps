@@ -10,7 +10,7 @@ from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream, chat, ModelGroup
 from agent.cognition.working_memory import build_messages
-from agent.memory import save_turn, init_databases, record_turn, generate_summary, reset_turns, add_mention, get_recent_session_log
+from agent.memory import save_turn, init_databases, record_turn, add_mention, get_recent_session_log
 from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
 
@@ -102,17 +102,6 @@ def _get_sid(metadata: dict) -> str:
     return metadata.get("session_id", "default")
 
 
-async def _run_summary(session_id: str):
-    await generate_summary(session_id)
-    reset_turns(session_id)
-
-
-def _maybe_summarize(sid: str, user_id: str):
-    turn_count = record_turn(sid, user_id)
-    if turn_count % 5 == 0:
-        asyncio.create_task(_run_summary(sid))
-
-
 def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entities: list[dict] | None = None):
     history_id = save_turn(user_id, "user", message, sid)
     save_turn(user_id, "assistant", reply_text, sid)
@@ -123,7 +112,7 @@ def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entiti
         for entity in entities:
             add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
 
-    _maybe_summarize(sid, user_id)
+    record_turn(sid, user_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

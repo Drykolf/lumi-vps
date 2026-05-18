@@ -187,3 +187,90 @@ def add_mood_log(state: dict, trigger_source: str,
     )
     conn.commit()
     conn.close()
+
+
+async def write_diary_entry(
+    period_start: datetime,
+    period_end: datetime,
+    talked_at_ts: datetime,
+    thread_span_minutes: int | None,
+    user_ids: list[str],
+    topic_label: str | None,
+    summary: str,
+    lumi_state: dict | None,
+    entry_type: str = "daily_thread",
+) -> int:
+    """Insert a single diary entry into traces.db. Returns the new row id."""
+    conn = traces.get_conn()
+    cur = conn.execute(
+        """INSERT INTO diary
+           (period_start, period_end, talked_at_ts, thread_span_minutes,
+            user_ids, topic_label, summary, lumi_state, entry_type)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            period_start.isoformat(),
+            period_end.isoformat(),
+            talked_at_ts.isoformat(),
+            thread_span_minutes,
+            json.dumps(user_ids, ensure_ascii=False),
+            topic_label,
+            summary,
+            json.dumps(lumi_state, ensure_ascii=False) if lumi_state else None,
+            entry_type,
+        ),
+    )
+    conn.commit()
+    row_id = cur.lastrowid
+    conn.close()
+    return row_id
+
+
+async def read_recent_diary_entries(
+    user_id: str | None = None,
+    limit: int = 7,
+    entry_type: str | None = "daily_thread",
+) -> list[dict]:
+    """Return the most recent diary entries, newest first.
+    If user_id is provided, filter by user_ids JSON array.
+    If entry_type is None, all entry types are returned.
+    Returns parsed fields: datetimes as datetime objects, user_ids as list,
+    lumi_state as dict or None."""
+    conn = traces.get_conn()
+    where = ""
+    params: list = []
+
+    if entry_type is not None:
+        where += " WHERE entry_type = ?"
+        params.append(entry_type)
+
+    if user_id is not None:
+        where += f" {'AND' if where else 'WHERE'} user_ids LIKE ?"
+        params.append(f'%"{user_id}"%')
+
+    rows = conn.execute(
+        f"""SELECT id, period_start, period_end, talked_at_ts, thread_span_minutes,
+                   user_ids, topic_label, summary, lumi_state, entry_type, created_at
+            FROM diary{where}
+            ORDER BY period_end DESC, talked_at_ts DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    conn.close()
+
+    results = []
+    for r in rows:
+        results.append({
+            "id": r[0],
+            "period_start": datetime.fromisoformat(r[1]),
+            "period_end": datetime.fromisoformat(r[2]),
+            "talked_at_ts": datetime.fromisoformat(r[3]),
+            "thread_span_minutes": r[4],
+            "user_ids": json.loads(r[5]) if r[5] else [],
+            "topic_label": r[6],
+            "summary": r[7],
+            "lumi_state": json.loads(r[8]) if r[8] else None,
+            "entry_type": r[9],
+            "created_at": datetime.fromisoformat(r[10]) if r[10] else None,
+        })
+
+    return results

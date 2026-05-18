@@ -1,6 +1,6 @@
 """
 Frequent rhythm tick — every 15 minutes.
-Handles idle sessions, pending summaries, mood evaluations, and catch-up.
+Handles idle sessions, mood evaluations, and catch-up.
 """
 from agent.rhythm.state import rhythm_task, rhythm_due
 from agent.rhythm.cadence import MOOD_CHECK_MINUTES, MOOD_IDLE_DECAY_MINUTES
@@ -8,10 +8,9 @@ from agent.substrate.logger import get_logger
 logger = get_logger("rhythm.pulse")
 
 async def rhythm_tick():
-    """Every RHYTHM_TICK_MINUTES: idle sessions, summaries, mood, catch-up."""
+    """Every RHYTHM_TICK_MINUTES: idle sessions, mood, catch-up."""
     async with rhythm_task("rhythm_tick"):
-        await idle_session_check()
-        await process_pending_summaries()
+        #await idle_session_check()
         await process_pending_mood_evaluations()
         await catch_up_pending_work()
         if await rhythm_due("mood_check", every_minutes=MOOD_CHECK_MINUTES):
@@ -21,23 +20,16 @@ async def rhythm_tick():
 
 
 async def idle_session_check() -> None:
-    """Finds sessions inactive for 30+ minutes, generates summaries, resets."""
+    """Finds sessions inactive for 30+ minutes and resets their turn counters."""
     from agent.rhythm.cadence import IDLE_SESSION_MINUTES
     from agent.memory.mindstream.session import get_stale_sessions, reset_turns
-    from agent.memory.mindstream.consolidation import generate_summary
 
     stale = get_stale_sessions(inactive_minutes=IDLE_SESSION_MINUTES)
     if not stale:
         return
 
     for sid in stale:
-        await generate_summary(sid)
         reset_turns(sid)
-
-
-async def process_pending_summaries() -> None:
-    """Placeholder: summarize closed sessions not yet summarized."""
-    ...
 
 
 async def process_pending_mood_evaluations() -> None:

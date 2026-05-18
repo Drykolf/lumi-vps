@@ -1,8 +1,11 @@
 """
 Nightly quiescence: deep maintenance at 3am COT.
-Consolidates memories, relationships, profiles, tasks, and learnings.
+Consolidates memories, relationships, profiles, tasks, and diary.
 """
+from datetime import datetime, timezone, timedelta
 from agent.rhythm.state import rhythm_task
+
+UTC = timezone.utc
 
 
 async def nightly_quiescence() -> None:
@@ -34,7 +37,28 @@ async def analyze_daily_tasks() -> None:
 
 
 async def extract_daily_learnings() -> None:
-    ...
+    """Generate diary entries for the period since the last diary run."""
+    from agent.memory.mindstream.consolidation import generate_daily_diary
+    from agent.subconscious import traces
+    from agent.substrate.logger import get_logger
+    logger = get_logger("rhythm.quiescence")
+
+    period_end = datetime.now(UTC)
+
+    conn = traces.get_conn()
+    row = conn.execute(
+        "SELECT MAX(period_end) FROM diary"
+    ).fetchone()
+    conn.close()
+
+    if row and row[0]:
+        period_start = datetime.fromisoformat(row[0])
+    else:
+        period_start = period_end - timedelta(hours=24)
+
+    written = await generate_daily_diary(period_start, period_end)
+    logger.info(f"[diary] nightly run | period_start={period_start.isoformat()} "
+                f"period_end={period_end.isoformat()} | entries={written}")
 
 
 async def cleanup_memory_tiers() -> None:
