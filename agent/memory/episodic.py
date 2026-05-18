@@ -159,3 +159,31 @@ def mark_memory_evaluated(max_id: int):
     )
     conn.commit()
     conn.close()
+
+
+def add_mood_log(state: dict, trigger_source: str,
+                 session_id: str | None = None,
+                 note: str | None = None):
+    conn = traces.get_conn()
+    conn.execute(
+        """INSERT INTO mood_logs
+           (ts, trigger_source, session_id, mood_valence, mood_energy,
+            irritation, focus_level, presence_need, state_label,
+            emotional_honesty_mode, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            datetime.now(UTC).isoformat(),
+            trigger_source,
+            session_id,
+            state.get("mood_valence", 0.3),
+            state.get("mood_energy", 0.6),
+            state.get("irritation", 0.1),
+            state.get("focus_level", 0.7),
+            state.get("presence_need", 0.0),
+            state.get("state_label", "centered"),
+            int(state.get("emotional_honesty_mode", False)),
+            note,
+        ),
+    )
+    conn.commit()
+    conn.close()

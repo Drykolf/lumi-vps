@@ -49,10 +49,11 @@ async def mood_check() -> None:
     """Hourly mood evaluation: idle decay or LLM contextual evaluation.
     Idle decay only triggers after MOOD_IDLE_DECAY_MINUTES of inactivity.
     Uses actual elapsed idle time as input to the decay formula.
-    Saves updated state to core.db, marks history rows as mood_evaluated."""
+    Saves updated state to core.db, marks history rows as mood_evaluated.
+    Logs every mood change to traces.db mood_logs table."""
     from datetime import datetime, timezone, timedelta
     from agent.affect import get_state, idle_decay, evaluate_mood, write_state, check_emotional_honesty_mode
-    from agent.memory import get_unmood_evaluated, mark_mood_evaluated
+    from agent.memory import get_unmood_evaluated, mark_mood_evaluated, add_mood_log
 
     now = datetime.now(timezone.utc)
     window = timedelta(minutes=MOOD_CHECK_MINUTES * 1.5)
@@ -62,28 +63,49 @@ async def mood_check() -> None:
     messages = get_unmood_evaluated(since_ts, limit=200)
     current = get_state()
 
+    trigger = None
+    note = None
+    mood_change = False
     if not messages:
         last_at = current.get("last_interaction_at")
         if last_at:
             last_dt = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
-            elapsed = (now - last_dt).total_seconds() / 60.0
+            elapsed = (now - last_dt).total_seconds() / 60.0 #minutos de inactividad
         else:
             elapsed = MOOD_IDLE_DECAY_MINUTES
 
         if elapsed >= MOOD_IDLE_DECAY_MINUTES:
-            new_state = idle_decay(current, elapsed)
-            logger.info(f"[mood_check] idle decay applied | idle_mins={elapsed:.0f}")
+            last_updated = current.get("last_updated")
+            if last_updated:
+                last_up_dt = datetime.fromisoformat(last_updated)
+                since_update = (now - last_up_dt).total_seconds() / 60.0
+            else:
+                since_update = MOOD_IDLE_DECAY_MINUTES
+            if since_update >= MOOD_IDLE_DECAY_MINUTES:
+                new_state = idle_decay(current, elapsed)
+                trigger = "idle_decay"
+                note = f"idle decay applied | idle_mins={elapsed:.0f} | since_update_mins={since_update:.0f}"
+                logger.info(f"[mood_check] idle decay applied | idle_mins={elapsed:.0f}")
+                mood_change = True
+            else:
+                new_state = current
         else:
             new_state = current
     else:
         # TODO: Add persons interest and profile of everyone involved
         new_state, reasoning = await evaluate_mood(messages, current)
+        trigger = "mood_check"
+        note = f"LLM eval | msgs={len(messages)} | {reasoning[:120]}"
         max_id = max(m["id"] for m in messages)
         mark_mood_evaluated(max_id)
+        mood_change = True
         logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:120]}")
 
-    write_state(new_state)
-    check_emotional_honesty_mode()
+    if mood_change: 
+        write_state(new_state)
+        if trigger:
+            add_mood_log(new_state, trigger_source=trigger, note=note)
+        check_emotional_honesty_mode()
 
 
 async def catch_up_pending_work() -> None:

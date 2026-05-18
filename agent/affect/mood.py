@@ -126,6 +126,8 @@ def apply_deltas(**deltas: float) -> dict:
             state[field] = max(lo, min(hi, state[field] + delta))
 
     _write_state(state)
+    from agent.memory.episodic import add_mood_log
+    add_mood_log(state, trigger_source="event")
     return state
 
 
@@ -153,6 +155,8 @@ def morning_reset():
     state["last_day_reset"] = now
 
     _write_state(state)
+    from agent.memory.episodic import add_mood_log
+    add_mood_log(state, trigger_source="morning_regression")
     return state
 
 
@@ -168,6 +172,9 @@ def check_emotional_honesty_mode() -> bool:
                 and state["presence_need"] < 0.4):
             state["emotional_honesty_mode"] = False
             _write_state(state)
+            from agent.memory.episodic import add_mood_log
+            add_mood_log(state, trigger_source="event",
+                         note="emotional_honesty_mode disabled")
     else:
         # Enable: irritation > 0.6 OR mood_valence < -0.2 OR presence_need > 0.6
         if (state["irritation"] > 0.6
@@ -175,5 +182,8 @@ def check_emotional_honesty_mode() -> bool:
                 or state["presence_need"] > 0.6):
             state["emotional_honesty_mode"] = True
             _write_state(state)
+            from agent.memory.episodic import add_mood_log
+            add_mood_log(state, trigger_source="event",
+                         note="emotional_honesty_mode enabled")
 
     return state["emotional_honesty_mode"]

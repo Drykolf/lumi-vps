@@ -116,3 +116,30 @@ CREATE INDEX IF NOT EXISTS idx_person_mentions_user
 
 CREATE INDEX IF NOT EXISTS idx_person_mentions_resolution
     ON person_mentions(resolution_status);
+
+-- ============================================================
+-- MOOD_LOGS — snapshot of lumi_state after every write
+-- ============================================================
+CREATE TABLE IF NOT EXISTS mood_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    trigger_source TEXT NOT NULL,
+    session_id TEXT,
+    mood_valence REAL NOT NULL,
+    mood_energy REAL NOT NULL,
+    irritation REAL NOT NULL,
+    focus_level REAL NOT NULL,
+    presence_need REAL NOT NULL,
+    state_label TEXT NOT NULL,
+    emotional_honesty_mode INTEGER NOT NULL,
+    note TEXT,
+    CHECK (mood_valence >= -1.0 AND mood_valence <= 1.0),
+    CHECK (mood_energy >= 0.0 AND mood_energy <= 1.0),
+    CHECK (irritation >= 0.0 AND irritation <= 1.0),
+    CHECK (focus_level >= 0.0 AND focus_level <= 1.0),
+    CHECK (presence_need >= 0.0 AND presence_need <= 1.0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_mood_logs_ts ON mood_logs(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_mood_logs_session ON mood_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_mood_logs_trigger ON mood_logs(trigger_source, ts DESC);

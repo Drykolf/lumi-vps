@@ -21,6 +21,7 @@ from agent.memory.episodic import (
     mark_mood_evaluated,
     get_unmemory_evaluated,
     mark_memory_evaluated,
+    add_mood_log,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -127,4 +128,5 @@ __all__ = [
     "add_mention",
     "get_recent_mentions",
     "get_user_mentions",
+    "add_mood_log",
 ]
