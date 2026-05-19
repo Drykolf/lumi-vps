@@ -170,6 +170,9 @@ CREATE TABLE IF NOT EXISTS lumi_state (
     emotional_honesty_mode INTEGER
         GENERATED ALWAYS AS (json_extract(data, '$.emotional_honesty_mode')) VIRTUAL,
 
+    negative_load REAL
+        GENERATED ALWAYS AS (json_extract(data, '$.negative_load')) VIRTUAL,
+
     last_interaction_at TEXT
         GENERATED ALWAYS AS (json_extract(data, '$.last_interaction_at')) VIRTUAL,
 
@@ -241,3 +244,11 @@ CREATE TABLE IF NOT EXISTS heartbeat_state (
     run_count INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ============================================================
+-- One-time data backfill for negative_load (idempotent)
+-- ============================================================
+UPDATE lumi_state
+SET data = json_set(data, '$.negative_load', 0.0)
+WHERE key = 'mood_state'
+  AND json_extract(data, '$.negative_load') IS NULL;

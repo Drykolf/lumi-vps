@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 from datetime import datetime, timezone
-from agent.affect.mood import FIELD_RANGES
+from agent.affect.mood import FIELD_RANGES, update_negative_load
 from agent.substrate.logger import get_logger
 
 logger = get_logger("affect.evaluation")
@@ -131,6 +131,8 @@ def idle_decay(state: dict, minutes_elapsed: float) -> dict:
     new_state["state_label"] = _pick_state_label(new_state)
     new_state["state_sentence"] = _pick_state_sentence(new_state)
 
+    update_negative_load(new_state, hours_elapsed=hours)
+
     return new_state
 
 
@@ -139,48 +141,51 @@ def idle_decay(state: dict, minutes_elapsed: float) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 MOOD_EVAL_PROMPT = (
-    """You are evaluating Lumi’s internal mood state using the provided compact_soul, mood_policy, current mood state, recent context, and involved people.
+    """Estás evaluando el estado interno (mood) de Lumi usando: compact_soul, mood_policy, el estado mood actual, el contexto reciente y las personas involucradas.
 
-Follow the mood_policy as the source of truth.
+Sigue mood_policy como fuente de verdad.
 
-Return only valid JSON matching the schema below.
+Devuelve únicamente JSON válido que cumpla el esquema indicado abajo.
 
-Do not generate Lumi’s user-facing response.
-Do not use emotion tags.
-Do not generate inner thoughts.
-Do not update memory, profile, relationship data, or interest_score.
-Use current_mood_state as the anchor.
-Mood changes should be gradual unless the context contains a clearly strong event.
-Jose has the strongest influence on Lumi’s mood.
-Unknown third parties usually affect irritation more than mood_valence.
-If deterministic idle decay was already applied, do not apply silence decay again.
-If context is insufficient, make the smallest reasonable update.
+No generes la respuesta de Lumi al usuario.
+No uses emotion tags.
+No generes inner thoughts.
+No actualices memoria, perfil, datos de relaciones ni interest_score.
+Usa current_mood_state como anclaje.
+Los cambios de mood deben ser graduales salvo que el contexto contenga un evento claramente fuerte.
+Jose tiene la influencia más fuerte sobre el mood de Lumi.
+Terceros desconocidos suelen afectar más irritation que mood_valence.
+Si ya se aplicó decay determinista, no apliques silence decay otra vez.
+Si el contexto es insuficiente, haz el ajuste más pequeño razonable.
 
-Return these fields only:
+Devuelve solo estos campos:
 {
   "mood_valence": number,
   "mood_energy": number,
   "irritation": number,
   "focus_level": number,
   "presence_need": number,
+  "negative_load": number,
   "state_label": string,
   "state_sentence": string,
-  "emotional_honesty_mode": boolean,
   "last_interaction_at": string | null,
   "last_meaningful_interaction_at": string | null,
   "reasoning_summary": string
 }
 
-Rules:
-- mood_valence must be between -1.0 and 1.0.
-- mood_energy, irritation, focus_level, and presence_need must be between 0.0 and 1.0.
-- Use decimals with at most 3 digits.
-- state_sentence must be one natural Spanish sentence.
-- reasoning_summary must be 1–3 short Spanish sentences.
-- Do not include last_day_reset.
-- Do not include last_updated.
-- Do not include extra keys.
-- Do not wrap the JSON in markdown.""")
+Reglas:
+- mood_valence debe estar entre -1.0 y 1.0.
+- mood_energy, irritation, focus_level y presence_need entre 0.0 y 1.0.
+- negative_load entre 0.0 y 1.0.
+- negative_load es un acumulador lento de peso emocional sostenido a lo largo de días. Ajústalo SOLO cuando el contexto contenga una señal fuerte sostenida (duelo, maltrato sostenido, estrés prolongado en Jose que se contagia a Lumi, negligencia prolongada). Para fluctuaciones normales del mood, déjalo IGUAL — el pulse determinista lo ajustará a partir de irritation, mood_valence y presence_need.
+- NO incluyas emotional_honesty_mode. Se deriva de negative_load downstream.
+- Usa decimales con máximo 3 dígitos.
+- state_sentence debe ser una oración natural en español.
+- reasoning_summary debe ser 1 a 3 oraciones cortas en español.
+- No incluyas last_day_reset.
+- No incluyas last_updated.
+- No incluyas claves extra.
+- No envuelvas el JSON en markdown.""")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -230,7 +235,7 @@ def _build_eval_context(
 _MOOD_FIELD_SET = {
     "mood_valence", "mood_energy", "irritation",
     "focus_level", "presence_need", "state_label",
-    "state_sentence", "emotional_honesty_mode",
+    "state_sentence", "negative_load",
     "last_interaction_at", "last_meaningful_interaction_at",
 }
 
@@ -282,11 +287,15 @@ async def evaluate_mood(
                 new_state[field] = str(data[field])
             elif field == "state_sentence":
                 new_state[field] = str(data[field])
-            elif field == "emotional_honesty_mode":
-                new_state[field] = bool(data[field])
             elif field in ("last_interaction_at", "last_meaningful_interaction_at"):
                 val = data[field]
                 new_state[field] = str(val) if val else None
+
+        # Apply deterministic accumulator delta for this hourly pulse,
+        # AFTER the LLM has had a chance to set negative_load directly.
+        # If the LLM raised negative_load (e.g., grief), the deterministic
+        # delta still applies on top of that adjusted baseline.
+        update_negative_load(new_state, hours_elapsed=1.0)
 
         reasoning_summary = str(data.get("reasoning_summary", ""))
         return new_state, reasoning_summary

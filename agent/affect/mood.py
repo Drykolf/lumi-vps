@@ -18,6 +18,7 @@ DEFAULT_STATE = {
     "irritation": 0.1,
     "focus_level": 0.7,
     "presence_need": 0.0,
+    "negative_load": 0.0,
     "state_label": "centered",
     "state_sentence": "Lumi está centrada, clara y disponible.",
     "emotional_honesty_mode": False,
@@ -33,7 +34,21 @@ FIELD_RANGES = {
     "irritation": (0.0, 1.0),
     "focus_level": (0.0, 1.0),
     "presence_need": (0.0, 1.0),
+    "negative_load": (0.0, 1.0),
 }
+
+# ── Emotional honesty mode (derived from negative_load) ──────────────────────
+
+NEGATIVE_LOAD_RATES = {
+    "strong_negative": +0.030,   # per hour
+    "mild_negative":   +0.018,
+    "neutral":         -0.008,
+    "positive":        -0.022,
+}
+
+HONESTY_ON_THRESHOLD = 0.70
+HONESTY_OFF_THRESHOLD = 0.30
+MORNING_LOAD_DECAY_FACTOR = 0.93
 
 
 def _read_state() -> dict | None:
@@ -111,7 +126,11 @@ def init_state_table():
 def get_state(user_id: str = None) -> dict:
     """Return current state dict. user_id is ignored (Lumi owns a single state)."""
     state = _read_state()
-    return state or DEFAULT_STATE.copy()
+    if state is None:
+        return DEFAULT_STATE.copy()
+    if "negative_load" not in state:
+        state["negative_load"] = 0.0
+    return state
 
 
 def state_to_text(state: dict) -> str:
@@ -184,10 +203,45 @@ def touch_last_interaction(meaningful: bool = False):
     _write_state(state)
 
 
+def _classify_load_state(state: dict) -> str:
+    """Classify current mood into a load-accumulator category.
+
+    Strong/mild conditions match the old honesty-mode thresholds, kept as bands
+    so the deterministic classifier remains a faithful interpretation of
+    mood_policy thresholds — just averaged over time rather than instantaneous.
+    """
+    v = state.get("mood_valence", 0.3)
+    i = state.get("irritation", 0.1)
+    p = state.get("presence_need", 0.0)
+
+    if i > 0.7 or v < -0.4 or p > 0.7:
+        return "strong_negative"
+    if i > 0.6 or v < -0.2 or p > 0.6:
+        return "mild_negative"
+    if v > 0.3 and i < 0.2:
+        return "positive"
+    return "neutral"
+
+
+def update_negative_load(state: dict, hours_elapsed: float = 1.0) -> dict:
+    """Apply the per-hour delta to negative_load based on the current category.
+
+    Mutates and returns the passed-in state dict. Does NOT persist. The caller
+    is expected to invoke this after idle_decay() or evaluate_mood() each pulse,
+    then write the state once.
+    """
+    category = _classify_load_state(state)
+    delta = NEGATIVE_LOAD_RATES[category] * hours_elapsed
+    current = state.get("negative_load", 0.0)
+    state["negative_load"] = round(max(0.0, min(1.0, current + delta)), 4)
+    return state
+
+
 def morning_reset():
     """Daily regression toward baseline per mood_policy.md §329-352.
     Constants: irritation 60%→0.0, energy 50%→0.6, valence 40%→0.3,
-    focus 40%→0.7, presence_need 35%→0.0."""
+    focus 40%→0.7, presence_need 35%→0.0.
+    Also applies proportional decay to negative_load (7%)."""
     state = get_state()
     now = datetime.now(UTC).isoformat()
 
@@ -196,6 +250,9 @@ def morning_reset():
     state["mood_valence"] = _lerp(state["mood_valence"], 0.3, 0.4)
     state["focus_level"] = _lerp(state["focus_level"], 0.7, 0.4)
     state["presence_need"] = _lerp(state["presence_need"], 0.0, 0.35)
+    state["negative_load"] = round(
+        state.get("negative_load", 0.0) * MORNING_LOAD_DECAY_FACTOR, 4
+    )
     state["last_day_reset"] = now
 
     _write_state(state)
@@ -205,29 +262,40 @@ def morning_reset():
 
 
 def check_emotional_honesty_mode() -> bool:
-    """Evaluate triggers to enable or disable emotional_honesty_mode.
-    Per mood_policy.md §355-380. Returns current value after evaluation."""
-    state = get_state()
+    """Derive emotional_honesty_mode from negative_load with hysteresis.
 
-    if state["emotional_honesty_mode"]:
-        # Disable: valence >= 0.2 AND irritation < 0.3 AND presence_need < 0.4
-        if (state["mood_valence"] >= 0.2
-                and state["irritation"] < 0.3
-                and state["presence_need"] < 0.4):
-            state["emotional_honesty_mode"] = False
-            _write_state(state)
-            from agent.memory.episodic import add_mood_log
-            add_mood_log(state, trigger_source="event",
-                         note="emotional_honesty_mode disabled")
-    else:
-        # Enable: irritation > 0.6 OR mood_valence < -0.2 OR presence_need > 0.6
-        if (state["irritation"] > 0.6
-                or state["mood_valence"] < -0.2
-                or state["presence_need"] > 0.6):
-            state["emotional_honesty_mode"] = True
-            _write_state(state)
-            from agent.memory.episodic import add_mood_log
-            add_mood_log(state, trigger_source="event",
-                         note="emotional_honesty_mode enabled")
+    Activates when negative_load >= HONESTY_ON_THRESHOLD (0.70).
+    Deactivates when negative_load < HONESTY_OFF_THRESHOLD (0.30).
+    Between those bounds, the previous state is preserved.
+
+    Per mood_policy.md: the flag reflects SUSTAINED emotional load across
+    days, not instantaneous mood. The LLM evaluator may influence this
+    indirectly by adjusting negative_load when it observes strong sustained
+    context.
+
+    Returns the current value of the flag after evaluation.
+    """
+    state = get_state()
+    load = state.get("negative_load", 0.0)
+    was_active = state["emotional_honesty_mode"]
+
+    if was_active and load < HONESTY_OFF_THRESHOLD:
+        state["emotional_honesty_mode"] = False
+        _write_state(state)
+        from agent.memory.episodic import add_mood_log
+        add_mood_log(
+            state,
+            trigger_source="event",
+            note=f"emotional_honesty_mode disabled (load={load:.3f})",
+        )
+    elif not was_active and load >= HONESTY_ON_THRESHOLD:
+        state["emotional_honesty_mode"] = True
+        _write_state(state)
+        from agent.memory.episodic import add_mood_log
+        add_mood_log(
+            state,
+            trigger_source="event",
+            note=f"emotional_honesty_mode enabled (load={load:.3f})",
+        )
 
     return state["emotional_honesty_mode"]

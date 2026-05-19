@@ -34,3 +34,7 @@ CIERRE DE TURNO
 CIERRE DE SESIÓN (+5 turnos)
     ↓
 [reflection_policy.md] → session_summary + user_profile + lumi_state
+
+TODO:
+Rules db para que vaya guardando nuevas instrucciones
+El honesty mode se revisa en el morning regression o en su sleepy time
