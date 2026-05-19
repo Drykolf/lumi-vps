@@ -11,7 +11,7 @@ from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream, chat, ModelGroup
 from agent.cognition.working_memory import build_messages
-from agent.memory import save_turn, init_databases, record_turn, add_mention, get_recent_session_log
+from agent.memory import save_turn, init_databases, add_mention, get_recent_session_log
 from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
 
@@ -112,8 +112,6 @@ def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entiti
     if entities:
         for entity in entities:
             add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
-
-    record_turn(sid, user_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

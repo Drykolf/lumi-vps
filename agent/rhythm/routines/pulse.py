@@ -10,26 +10,12 @@ logger = get_logger("rhythm.pulse")
 async def rhythm_tick():
     """Every RHYTHM_TICK_MINUTES: idle sessions, mood, catch-up."""
     async with rhythm_task("rhythm_tick"):
-        #await idle_session_check()
         await process_pending_mood_evaluations()
         await catch_up_pending_work()
         if await rhythm_due("mood_check", every_minutes=MOOD_CHECK_MINUTES):
             async with rhythm_task("mood_check"):
                 await mood_check()
         #logger.info("Completed rhythm tick tasks.")
-
-
-async def idle_session_check() -> None:
-    """Finds sessions inactive for 30+ minutes and resets their turn counters."""
-    from agent.rhythm.cadence import IDLE_SESSION_MINUTES
-    from agent.memory.mindstream.session import get_stale_sessions, reset_turns
-
-    stale = get_stale_sessions(inactive_minutes=IDLE_SESSION_MINUTES)
-    if not stale:
-        return
-
-    for sid in stale:
-        reset_turns(sid)
 
 
 async def process_pending_mood_evaluations() -> None:

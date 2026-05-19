@@ -1,8 +1,7 @@
 -- LUMI traces.db
--- Conversation history, session tracking, and daily diary.
+-- Conversation history and daily diary.
 -- This is the SOURCE OF TRUTH for:
 --   * Sequential conversation turns (history)
---   * Per-session turn counters (session_turns)
 --   * Lumi's daily diary entries (diary)
 --   * Mood state time-series (mood_logs)
 --
@@ -28,13 +27,6 @@ CREATE INDEX IF NOT EXISTS idx_history_mood_ts
 
 CREATE INDEX IF NOT EXISTS idx_history_memory_ts
     ON history(memory_evaluated, ts);
-
-CREATE TABLE IF NOT EXISTS session_turns (
-    session_id   TEXT PRIMARY KEY,
-    user_ids     TEXT NOT NULL DEFAULT '[]',
-    turn_count   INTEGER NOT NULL DEFAULT 0,
-    last_turn_at TEXT
-);
 
 -- ============================================================
 -- DIARY — Lumi's narrative log

@@ -2,7 +2,7 @@
 TracesRepository — SQLite database for conversation history.
 Database: data/traces.db
 Migration: 001_create_traces.sql
-Tables: history, session_turns, diary, mood_logs, heartbeat_runs, person_mentions
+Tables: history, diary, mood_logs, heartbeat_runs, person_mentions
 """
 import sqlite3
 from pathlib import Path

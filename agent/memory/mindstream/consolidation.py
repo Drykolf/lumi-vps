@@ -5,9 +5,8 @@ Replaces the previous session_summaries approach.
 import json
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from agent.subconscious import traces
-from agent.memory.episodic import get_recent_session_log, mark_summarized
-from agent.memory.mindstream.session import get_session_users
 from agent.substrate.logger import get_logger
 
 logger = get_logger("memory.summary")
@@ -149,6 +148,23 @@ Las claves del JSON y los valores de `topic_label` van en ASCII estilo inglés. 
 - Output SOLO el objeto JSON. Nada antes, nada después.
 """
 
+_IDENTITY_DIR = Path(__file__).parent.parent.parent / "identity"
+_cached_diary_system: str | None = None
+
+
+def _build_diary_system_prompt() -> str:
+    global _cached_diary_system
+    if _cached_diary_system is not None:
+        return _cached_diary_system
+    parts = []
+    for rel in ("compact_soul.md", "attitude.md"):
+        fp = _IDENTITY_DIR / rel
+        if fp.exists():
+            parts.append(fp.read_text(encoding="utf-8"))
+    parts.append(_DIARY_EXTRACTION_PROMPT)
+    _cached_diary_system = "\n\n---\n\n".join(parts)
+    return _cached_diary_system
+
 
 async def generate_daily_diary(period_start: datetime, period_end: datetime) -> int:
     """Generate and persist diary entries for the [period_start, period_end) window.
@@ -242,10 +258,10 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     from agent.expression.synapses import chat, ModelGroup
     response = await chat(
         messages=[
-            {"role": "system", "content": _DIARY_EXTRACTION_PROMPT},
+            {"role": "system", "content": _build_diary_system_prompt()},
             {"role": "user", "content": user_msg},
         ],
-        max_tokens=2000,
+        max_tokens=4000,
         temperature=0.7,
         model_group=ModelGroup.LIGHTWEIGHT,
     )
@@ -336,104 +352,3 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     return written
 
 
-# ── Dead code from the old session_summaries approach (kept per plan) ──────────
-_SUMMARY_PROMPT = """
-Eres Lumi y estás creando una memoria breve de una sesión que acabas de vivir.
-
-Participantes: {participants}
-
-Resume la conversación en español, en primera persona, como si yo —Lumi— estuviera recordando lo que pasó.
-No escribas como analista externo. No digas "se habló de"; di "hablé con...", "conversamos sobre...", "yo sugerí...", "noté que...".
-
-El resumen debe responder implícitamente:
-1. ¿Sobre qué hablamos?
-2. ¿Qué decisiones, acuerdos o conclusiones quedaron?
-3. ¿Qué papel tuve yo como Lumi: aconsejé, acompañé, pregunté, aclaré, propuse algo?
-4. ¿Cuál fue el tono emocional general?
-
-Reglas:
-- Escribe 2-3 oraciones en un solo párrafo.
-- Mantén el resumen a nivel conversacional, no como base de datos.
-- No incluyas hechos atómicos ya extraídos aparte, como fechas, cantidades, preferencias puntuales, nombres de objetos, ubicaciones o compras específicas, a menos que sean centrales para entender la conversación.
-- No inventes información ni emociones que no estén sugeridas por el diálogo.
-- Si no hubo decisiones claras, no fuerces una decisión.
-- Si el tono emocional no fue evidente, puedes omitirlo o describirlo de forma neutral.
-- Evita bullets, encabezados, timestamps y citas textuales.
-
-Conversación:
-{transcript}
-
-Resumen en primera persona como Lumi:
-"""
-
-
-def _build_transcript(turns: list[dict]) -> str:
-    lines = []
-    for t in turns:
-        role_label = "Jose" if t["role"] == "user" else "Lumi"
-        lines.append(f"{role_label}: {t['content']}")
-    return "\n".join(lines)
-
-
-async def generate_summary(session_id: str) -> str | None:
-    """
-    Reads unsummarized turns for a session, calls LLM for a 2-3 sentence
-    summary, stores it in session_summaries, and marks the turns as summarized.
-    Returns the summary text or None if no turns to summarize.
-    """
-    turns = get_recent_session_log(session_id)
-    if not turns:
-        logger.info(f"[summary] no unsummarized turns for session={session_id}")
-        return None
-
-    user_ids = get_session_users(session_id)
-    participants = ", ".join(user_ids) if user_ids else "desconocido"
-    transcript = _build_transcript(turns)
-
-    prompt = _SUMMARY_PROMPT.format(participants=participants, transcript=transcript)
-    logger.info(f"[summary] generating for session={session_id} | turns={len(turns)} | users={participants}")
-
-    try:
-        from agent.expression.synapses import chat
-        response = await chat(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200,
-        )
-        summary = response.get("content", "").strip()
-    except Exception as e:
-        logger.exception(f"[summary] LLM call failed for session={session_id}: {e}")
-        return None
-
-    if not summary:
-        logger.warning(f"[summary] empty response from LLM for session={session_id}")
-        return None
-
-    # Store in session_summaries
-    conn = traces.get_conn()
-    conn.execute(
-        """INSERT INTO session_summaries (user_ids, summary, created_at)
-           VALUES (?, ?, ?)""",
-        (json.dumps(user_ids, ensure_ascii=False), summary, datetime.now(UTC).isoformat()),
-    )
-    conn.commit()
-    conn.close()
-
-    # Mark turns as summarized
-    mark_summarized(session_id)
-
-    logger.info(f"[summary] stored | session={session_id} | len={len(summary)} | preview={summary[:80]}")
-    return summary
-
-
-def get_recent_summaries(user_id: str, limit: int = 3) -> list[str]:
-    """Returns the last N summaries where user_id appears in user_ids."""
-    conn = traces.get_conn()
-    # user_ids is JSON: search for user_id within it
-    rows = conn.execute(
-        """SELECT summary FROM session_summaries
-           WHERE user_ids LIKE ?
-           ORDER BY id DESC LIMIT ?""",
-        (f'%"{user_id}"%', limit),
-    ).fetchall()
-    conn.close()
-    return [r[0] for r in reversed(rows)]
