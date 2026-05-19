@@ -3,10 +3,14 @@ Lumi's dynamic internal state — implements mood_policy.md.
 Stored in core.db lumi_state table as a JSON blob.
 """
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timezone, timedelta
 from agent.subconscious import core
 
 UTC = timezone.utc
+
+LUMI_SLEEP_HOUR = int(os.getenv("LUMI_SLEEP_HOUR", "3"))
+LUMI_TZ_OFFSET = int(os.getenv("LUMI_TIMEZONE", "-5"))
 
 DEFAULT_STATE = {
     "mood_valence": 0.3,
@@ -61,6 +65,38 @@ def _write_state(state: dict):
 write_state = _write_state
 
 
+def _in_range(val: int, start: int, end: int) -> bool:
+    if start <= end:
+        return start <= val < end
+    return val >= start or val < end
+
+
+def get_sleep_stage(tz=None, sleep_hour=None) -> str:
+    if tz is None:
+        tz = timezone(timedelta(hours=LUMI_TZ_OFFSET))
+    if sleep_hour is None:
+        sleep_hour = LUMI_SLEEP_HOUR
+
+    now = datetime.now(tz)
+    current = now.hour * 60 + now.minute
+    sh = sleep_hour * 60
+
+    sleeping_start = (sh - 30) % 1440
+    sleeping_end   = (sh + 30) % 1440
+    sleepy_start   = (sh - 60) % 1440
+    sleepy_end     = (sh - 30) % 1440
+    drowsy_start   = (sh - 120) % 1440
+    drowsy_end     = (sh - 60) % 1440
+
+    if _in_range(current, sleeping_start, sleeping_end):
+        return "sleeping"
+    if _in_range(current, sleepy_start, sleepy_end):
+        return "sleepy"
+    if _in_range(current, drowsy_start, drowsy_end):
+        return "drowsy"
+    return "awake"
+
+
 # ── Init ──────────────────────────────────────────────────────────────────────
 
 def init_state_table():
@@ -83,29 +119,37 @@ def state_to_text(state: dict) -> str:
     Prefers state_sentence from JSON, falls back to numeric descriptor build."""
     sentence = state.get("state_sentence")
     if sentence:
-        return sentence
+        base = sentence
+    else:
+        valence = state.get("mood_valence", 0.3)
+        energy = state.get("mood_energy", 0.6)
+        irritation = state.get("irritation", 0.1)
 
-    valence = state.get("mood_valence", 0.3)
-    energy = state.get("mood_energy", 0.6)
-    irritation = state.get("irritation", 0.1)
+        valence_desc = (
+            "algo seria" if valence < 0.0
+            else "neutra" if valence < 0.3
+            else "de buen humor" if valence < 0.7
+            else "muy animada"
+        )
+        energy_desc = (
+            "cansada" if energy < 0.3
+            else "normal" if energy < 0.6
+            else "con energia"
+        )
+        irrit_desc = (
+            "" if irritation < 0.3
+            else ", con algo de fastidio acumulado" if irritation < 0.6
+            else ", bastante fastidiada"
+        )
+        base = f"Estado interno actual de Lumi: {valence_desc}, {energy_desc}{irrit_desc}."
 
-    valence_desc = (
-        "algo seria" if valence < 0.0
-        else "neutra" if valence < 0.3
-        else "de buen humor" if valence < 0.7
-        else "muy animada"
-    )
-    energy_desc = (
-        "cansada" if energy < 0.3
-        else "normal" if energy < 0.6
-        else "con energia"
-    )
-    irrit_desc = (
-        "" if irritation < 0.3
-        else ", con algo de fastidio acumulado" if irritation < 0.6
-        else ", bastante fastidiada"
-    )
-    return f"Estado interno actual de Lumi: {valence_desc}, {energy_desc}{irrit_desc}."
+    stage = get_sleep_stage()
+    if stage == "drowsy":
+        base += "\nLumi empieza a sentirse cansada."
+    elif stage == "sleepy":
+        base += "\nLumi está cansada y quiere descansar."
+
+    return base
 
 
 # ── Write (deltas) ───────────────────────────────────────────────────────────

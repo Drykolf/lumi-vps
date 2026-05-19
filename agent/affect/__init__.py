@@ -14,6 +14,7 @@ from agent.affect.mood import (
     check_emotional_honesty_mode,
     write_state,
     touch_last_interaction,
+    get_sleep_stage,
     FIELD_RANGES,
     DEFAULT_STATE,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "check_emotional_honesty_mode",
     "write_state",
     "touch_last_interaction",
+    "get_sleep_stage",
     "FIELD_RANGES",
     "DEFAULT_STATE",
     "idle_decay",

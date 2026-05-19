@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from agent.memory import get_recent_session_log, get_recent_user_log, search_relevant, get_user_information, read_recent_diary_entries, create_person_interest, set_user_information
-from agent.affect import get_state, state_to_text
+from agent.affect import get_state, state_to_text, get_sleep_stage
+from agent.affect.mood import LUMI_TZ_OFFSET
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.context")
@@ -60,6 +61,23 @@ async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> s
 
     relevant_memories = await search_relevant(user_id, message)
     parts = ["[Estado interno] " + state_to_text(state)]
+
+    stage = get_sleep_stage(timezone(timedelta(hours=LUMI_TZ_OFFSET)))
+    if stage == "drowsy":
+        parts.append(
+            "[Modo descanso] Lumi está ligeramente cansada. "
+            "Responde con normalidad, pero con un tono algo más tranquilo "
+            "y pausado que lo habitual. No lo menciones a menos que la "
+            "conversación lo invite naturalmente."
+        )
+    elif stage == "sleepy":
+        parts.append(
+            "[Modo descanso] Lumi está muy cansada y pronto va a descansar. "
+            "Responde lo que haya que responder, y al final añade una frase "
+            "corta y natural indicando que ya quieres descansar o que "
+            "continuarán después. En tu voz, sin drama, sin repetirlo si "
+            "ya lo dijiste antes en la conversación."
+        )
 
     diary_block = await _build_diary_suffix(user_id)
     if diary_block:

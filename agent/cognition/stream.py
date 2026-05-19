@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import re
+from datetime import timezone, timedelta
 
 from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
@@ -120,6 +121,12 @@ def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entiti
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def cycle(user_id: str, message: str, metadata: dict):
+    from agent.affect.mood import get_sleep_stage, LUMI_TZ_OFFSET
+
+    if get_sleep_stage(timezone(timedelta(hours=LUMI_TZ_OFFSET))) == "sleeping":
+        yield "[tired] Zzz..."
+        return
+
     task_type = attention.classify(message)
     logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
     sid = _get_sid(metadata)
