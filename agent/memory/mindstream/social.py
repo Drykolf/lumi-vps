@@ -517,49 +517,51 @@ def find_person_candidates_by_name(
     limit: int = 10,
 ) -> list[dict]:
     """Search known_persons for candidates matching a name mention."""
-    normalized = normalize_name(raw_name)
-    if not normalized:
-        return []
-    is_single_word = len(normalized.split()) == 1
+    normalized = normalize_name(raw_name) if raw_name else ""
     desc_norm = normalize_name(descriptor) if descriptor else None
+    if not normalized and not (desc_norm and anchor_person_id):
+        return []
+    is_single_word = len(normalized.split()) == 1 if normalized else False
 
     conn = core.get_conn()
     candidates = []
+    seen_ids: set[str] = set()
 
-    # 1. Canonical name match
-    for person in _cnn_like(conn, normalized):
-        score = _score_canonical_match(
-            person["canonical_name_norm"], normalized, is_single_word
-        )
-        if score and score > 0:
-            candidates.append({
-                "person_id": person["person_id"],
-                "display_name": person["display_name"],
-                "score": score,
-                "matched_on": "canonical_name",
-                "person": person,
-                "relation": None,
-            })
+    if normalized:
+        # 1. Canonical name match
+        for person in _cnn_like(conn, normalized):
+            score = _score_canonical_match(
+                person["canonical_name_norm"], normalized, is_single_word
+            )
+            if score and score > 0:
+                candidates.append({
+                    "person_id": person["person_id"],
+                    "display_name": person["display_name"],
+                    "score": score,
+                    "matched_on": "canonical_name",
+                    "person": person,
+                    "relation": None,
+                })
 
-    # 2. Alias match (scan all persons not already matched)
-    seen_ids = {c["person_id"] for c in candidates}
-    all_rows = conn.execute("SELECT * FROM known_persons").fetchall()
-    for row in all_rows:
-        person = dict(row)
-        if person["person_id"] in seen_ids:
-            continue
-        aliases = parse_aliases(person["aliases_json"])
-        alias_score = _score_alias_match(aliases, normalized)
-        if alias_score and alias_score > 0:
-            candidates.append({
-                "person_id": person["person_id"],
-                "display_name": person["display_name"],
-                "score": alias_score,
-                "matched_on": "alias",
-                "person": person,
-                "relation": None,
-            })
-            seen_ids.add(person["person_id"])
+        # 2. Alias match (scan all persons not already matched)
+        seen_ids = {c["person_id"] for c in candidates}
+        all_rows = conn.execute("SELECT * FROM known_persons").fetchall()
+        for row in all_rows:
+            person = dict(row)
+            if person["person_id"] in seen_ids:
+                continue
+            aliases = parse_aliases(person["aliases_json"])
+            alias_score = _score_alias_match(aliases, normalized)
+            if alias_score and alias_score > 0:
+                candidates.append({
+                    "person_id": person["person_id"],
+                    "display_name": person["display_name"],
+                    "score": alias_score,
+                    "matched_on": "alias",
+                    "person": person,
+                    "relation": None,
+                })
+                seen_ids.add(person["person_id"])
 
     # 3. Descriptor match via relations
     if desc_norm and anchor_person_id:

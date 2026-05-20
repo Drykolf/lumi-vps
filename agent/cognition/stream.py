@@ -11,7 +11,18 @@ from agent.cognition import attention, intention
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream, chat, ModelGroup
 from agent.cognition.working_memory import build_messages
-from agent.memory import save_turn, init_databases, add_mention, get_recent_session_log
+from agent.memory import (
+    save_turn,
+    init_databases,
+    add_mention,
+    update_mention_resolution,
+    get_recent_session_log,
+    resolve_person_mention,
+    get_known_person,
+    get_relations,
+    increment_person_mention,
+    search_person_relevant,
+)
 from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
 
@@ -89,6 +100,105 @@ async def _entities_check(message: str, sid: str, user_id: str, prompt_cache_key
         logger.warning(f"[entities_check] failed: {e}")
     return default
 
+def _slim_candidates(candidates: list[dict] | None) -> list[dict]:
+    """Trim candidate dicts before persisting to candidates_json (drops nested rows)."""
+    if not candidates:
+        return []
+    out = []
+    for c in candidates:
+        out.append({
+            "person_id": c.get("person_id"),
+            "display_name": c.get("display_name"),
+            "score": c.get("score"),
+            "matched_on": c.get("matched_on"),
+        })
+    return out
+
+
+async def _resolve_entities(entities: list[dict], user_id: str, message: str) -> list[dict]:
+    """Resolve each detected entity against known_persons and assemble context.
+    Returns a list parallel to `entities` used for prompt injection and
+    post-turn persistence. Self-mentions (entity resolves to speaker) are kept
+    in the list (so persistence still records them) but flagged `is_self_mention=True`
+    so the formatter skips them."""
+    contexts: list[dict] = []
+    for entity in entities:
+        try:
+            resolution = resolve_person_mention(entity, anchor_person_id=user_id)
+        except Exception as e:
+            logger.warning(f"[resolve] failed for entity={entity.get('raw_text','')!r}: {e}")
+            resolution = {
+                "status": "unknown",
+                "candidates": [],
+                "reason": f"resolver error: {e}",
+                "mention": entity,
+            }
+
+        ctx = {
+            "mention": entity,
+            "status": resolution.get("status", "unknown"),
+            "person_id": resolution.get("person_id"),
+            "display_name": resolution.get("display_name"),
+            "candidates": resolution.get("candidates", []),
+            "reason": resolution.get("reason", ""),
+            "raw_name": entity.get("raw_name"),
+            "descriptor": entity.get("descriptor"),
+            "person": None,
+            "relations": [],
+            "scoped_memories": [],
+            "is_self_mention": False,
+        }
+
+        status = ctx["status"]
+        pid = ctx.get("person_id")
+
+        # Assistant-leak guard: if Lumi's prior turn used the user's own name
+        # (e.g. "Buenas tardes, Jose"), the next-turn transcript carries it and
+        # the extractor may attribute the mention to "Lumi". Drop only when
+        # both: the speaker is the anchor target AND the resolver pointed back
+        # at the user themselves. Third parties Lumi mentions (Gloria, Jose Luis,
+        # etc.) keep their normal context fetch + injection.
+        anchor_lower = (entity.get("anchor") or "").lower()
+        if anchor_lower in ("lumi", "asistente", "assistant") and pid == user_id:
+            ctx["is_self_mention"] = True
+            logger.info(
+                f"[resolve] dropping assistant-name-echo: "
+                f"raw={entity.get('raw_text','')[:40]!r}"
+            )
+            contexts.append(ctx)
+            continue
+
+        if status == "resolved" and pid:
+            if pid == user_id:
+                ctx["is_self_mention"] = True
+            else:
+                try:
+                    ctx["person"] = get_known_person(pid)
+                    ctx["relations"] = get_relations(pid) or []
+                except Exception as e:
+                    logger.warning(f"[resolve] profile/relations fetch failed for {pid}: {e}")
+                try:
+                    ctx["scoped_memories"] = await search_person_relevant(
+                        user_id=user_id, person_id=pid, query=message,
+                        limit=3, min_score=0.5,
+                    )
+                except Exception as e:
+                    logger.warning(f"[resolve] scoped Mem0 failed for {pid}: {e}")
+        elif status == "candidate_unconfirmed" and pid:
+            try:
+                ctx["person"] = get_known_person(pid)
+            except Exception as e:
+                logger.warning(f"[resolve] profile fetch failed for {pid}: {e}")
+
+        logger.info(
+            f"[resolve] raw={entity.get('raw_text','')[:40]!r} "
+            f"status={status} person={pid} self={ctx['is_self_mention']}"
+        )
+        contexts.append(ctx)
+
+    return contexts
+
+
 # Inicializar bases de datos al importar
 init_databases()
 init_state_table()
@@ -103,15 +213,43 @@ def _get_sid(metadata: dict) -> str:
     return metadata.get("session_id", "default")
 
 
-def _finalize_turn(user_id: str, message: str, reply_text: str, sid: str, entities: list[dict] | None = None):
+def _finalize_turn(
+    user_id: str,
+    message: str,
+    reply_text: str,
+    sid: str,
+    entities: list[dict] | None = None,
+    entities_context: list[dict] | None = None,
+):
     history_id = save_turn(user_id, "user", message, sid)
     save_turn(user_id, "assistant", reply_text, sid)
 
     touch_last_interaction()
 
-    if entities:
-        for entity in entities:
-            add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
+    if not entities:
+        return
+
+    for i, entity in enumerate(entities):
+        row = add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
+        if not row:
+            continue
+        ctx = entities_context[i] if entities_context and i < len(entities_context) else None
+        if not ctx:
+            continue
+        try:
+            update_mention_resolution(
+                mention_id=row["mention_id"],
+                status=ctx.get("status", "unknown"),
+                resolved_person_id=ctx.get("person_id"),
+                candidates=_slim_candidates(ctx.get("candidates")),
+            )
+        except Exception as e:
+            logger.warning(f"[finalize] update_mention_resolution failed: {e}")
+        if ctx.get("status") == "resolved" and ctx.get("person_id"):
+            try:
+                increment_person_mention(ctx["person_id"])
+            except Exception as e:
+                logger.warning(f"[finalize] increment_person_mention failed: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -142,8 +280,9 @@ async def cycle(user_id: str, message: str, metadata: dict):
         return
 
     entities = await _entities_check(message, sid, user_id)#, prompt_cache_key=CACHE_KEY_ENTITY)
-
-    messages = await build_messages(user_id, message, metadata, entities=entities)
+    entities_context = await _resolve_entities(entities, user_id, message) if entities else []
+    logger.info(f"[entities] detected {len(entities)} entities with context: {[{'raw_text': e.get('raw_text','')[:30], 'status': c.get('status'), 'person_id': c.get('person_id')} for e, c in zip(entities, entities_context)]}")
+    messages = await build_messages(user_id, message, metadata, entities_context=entities_context)
 
     tool, args = await intention.decide_tool(sid, message)#, prompt_cache_key=CACHE_KEY_TOOL)
     if tool and args is not None:
@@ -162,7 +301,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
         full_reply += chunk
         yield chunk
 
-    _finalize_turn(user_id, message, full_reply, sid, entities=entities)
+    _finalize_turn(user_id, message, full_reply, sid, entities=entities, entities_context=entities_context)
 
 
 async def run_stream(user_id: str, message: str, metadata: dict):

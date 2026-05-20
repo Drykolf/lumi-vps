@@ -66,6 +66,7 @@ from agent.memory.mindstream.consolidation import generate_daily_diary
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
     add_mention,
+    update_mention_resolution,
     get_recent_mentions,
     get_user_mentions,
 )
@@ -120,6 +121,7 @@ __all__ = [
     "cleanup_heartbeat_runs",
     "run_all_cleanups",
     "add_mention",
+    "update_mention_resolution",
     "get_recent_mentions",
     "get_user_mentions",
     "add_mood_log",

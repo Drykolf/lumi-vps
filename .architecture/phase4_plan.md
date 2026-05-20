@@ -1,13 +1,18 @@
 # LUMI VPS — Phase 4 Unified Plan
 
-**Last updated:** May 19, 2026
+**Last updated:** May 21, 2026
 **Source:** Merged from 3 sources:
 - `.architecture/plan.md` (original Phase 4 plan)
 - `.architecture/phase4_known_persons_read_path_plan.md` (Phase 4A — schema migration + social read-path)
 - Full codebase audit of `agent/` (45 Python files)
 
 **Active phase:** 4 (Mem0 + semantic memory — social features)
-**Next target:** Complete Block 1 pipeline → unlock per-turn social feedback loop
+**Next target:** Block 2 — per-turn interest deltas
+
+**Status:** Block 1 (read-path) shipped May 21, 2026. Per-turn third-party entity
+resolution + injection is live. Mentions persist with resolution outcome for
+nightly consolidation (Block 5). See `.claude/plans/i-need-to-start-sharded-eich.md`
+for the design doc and decisions locked.
 
 **Note:** Phase 4A (schema migration from `person_interest`/`user_profiles` → `known_persons`/`relations`) is **fully implemented**. All social.py functions, resolution engine, and legacy wrappers exist and work. The gap is wiring them into the prompt builder.
 
@@ -90,6 +95,14 @@ agent/
 | **sleep stages** awake/drowsy/sleepy/sleeping injected into prompt | ✅ | `mood.py:74`, `working_memory.py:65` |
 | **entity detection** _entities_check() LLM call per turn | ✅ | `stream.py:54`, called at `:144` |
 | **mention persistence** Raw entities saved to person_mentions table | ✅ | `stream.py:112`, `mentions.py:12` |
+| **entity resolution** Deterministic resolver wired per turn | ✅ | `stream.py:_resolve_entities`, `social.py:627` |
+| **resolution persistence** Stamp `resolution_status`/`resolved_person_id`/`candidates_json`/`resolved_at` | ✅ | `mentions.py:update_mention_resolution`, called in `_finalize_turn` |
+| **resolved persons in prompt** Token-budgeted block injected into dynamic suffix | ✅ | `working_memory.py:_format_entity_sections` |
+| **speaker profile in prompt** `[Usuario]` block driven by `get_known_person()` | ✅ | `working_memory.py:_format_speaker_block` |
+| **scoped Mem0 search** `search_person_relevant()` called per resolved person | ✅ | `stream.py:_resolve_entities` |
+| **person mention increments** `increment_person_mention()` per resolved entity | ✅ | `stream.py:_finalize_turn` |
+| **descriptor-only resolution** "mi mamá" resolves via relations without raw_name | ✅ | `social.py:find_person_candidates_by_name` |
+| **assistant-leak guard** Drop `anchor=Lumi AND pid=user_id` (echo of user's name) | ✅ | `stream.py:_resolve_entities` |
 
 ---
 
@@ -98,14 +111,15 @@ agent/
 | System | Status | Location |
 |--------|--------|----------|
 | **Mem0 fact extraction (add_memory)** | ❌ Never called from agent loop | `semantic.py:26` exists but stream.py never imports it |
-| **Entity resolution** | ❌ _entities_check returns raw entities, never resolved against known_persons | `stream.py:144` → results unused in prompt building |
-| **Scoped Mem0 search (per person)** | ❌ `search_person_relevant()` exists, never called | `semantic.py:75` |
-| **Resolved persons in prompt** | ❌ `build_messages()` accepts `entities` param but ignores it | `working_memory.py:130` |
-| **User info/interest in prompt** | ❌ Commented out block (lines 89-108) | `working_memory.py:89-108` |
+| **Entity resolution** | ✅ DONE 2026-05-21 — wired via `_resolve_entities` | `stream.py:_resolve_entities`, calls `social.py:627` |
+| **Scoped Mem0 search (per person)** | ✅ DONE 2026-05-21 — called when status=resolved | `stream.py:_resolve_entities`, `semantic.py:75` |
+| **Resolved persons in prompt** | ✅ DONE 2026-05-21 — entities_context plumbed end-to-end | `working_memory.py:build_messages` |
+| **User info/interest in prompt** | ✅ DONE 2026-05-21 — replaced legacy stub with `_format_speaker_block` | `working_memory.py` |
 | **interest deltas** | ❌ `add_delta()` never called from agent loop | `social.py:725` |
-| **person mention increments** | ❌ `increment_person_mention()` never called | `social.py:212` |
+| **person mention increments** | ✅ DONE 2026-05-21 — called in `_finalize_turn` for resolved | `social.py:212` |
 | **interest decay** | ❌ `run_decay()` exists, weekly cron stub is `...` | `social.py:770`, `forgetting.py:19` |
-| **relations** | ❌ `add_relation()`/`get_relations()` never called in conversation flow | `social.py:243/303` |
+| **relations (read)** | ✅ DONE 2026-05-21 — `get_relations()` called per resolved person | `social.py:303` |
+| **relations (write)** | ❌ `add_relation()` not called in conversation flow (nightly only) | `social.py:243` |
 | **family inference** | ❌ `infer_family_relations()` never triggered | `social.py:806` |
 | **involved people in mood eval** | ❌ `mood_check()` passes `None`, `_build_eval_context()` still says `"# TODO"` | `pulse.py:74`, `evaluation.py:211` |
 | **emotional honesty mode** | ❌ Flag set by `check_emotional_honesty_mode()` but never read by prompt builder | `mood.py:207`, NOT in `working_memory.py` |
@@ -117,29 +131,41 @@ agent/
 
 ## Phase 4 — Remaining Work (6 blocks, re-verified)
 
-### Block 1 — Third-Party Entity Recognition Pipeline (unlocks everything social)
+### Block 1 — Third-Party Entity Recognition Pipeline ✅ SHIPPED 2026-05-21
 
-The 5-step pipeline from `memory_search.md` is specified but **only Step 1 is connected** to the agent loop. `_entities_check()` runs per turn and saves raw mentions to `person_mentions`, but steps 2-7 are not wired.
+End-to-end per-turn resolution + injection is live. Mentions persist with
+resolution outcome; nightly write-path (Step 3 — seeding new persons) is
+deferred to Block 5 per locked plan decision.
 
-**Current state:**
-- `_entities_check(message, sid, user_id)` runs at `stream.py:144` → returns raw `[{raw_text, mention_type, raw_name, descriptor, anchor, confidence}]`
-- Entity results passed to `build_messages(..., entities=entities)` at `:146` → **ignored** inside `_build_dynamic_suffix()`
-- Entity results saved as raw mentions via `add_mention()` at `_finalize_turn()`
+**Files touched:**
+- `agent/cognition/stream.py` — new `_resolve_entities()`, `_slim_candidates()`; extended `_finalize_turn()` to stamp resolution + bump counters
+- `agent/cognition/working_memory.py` — `build_messages` accepts `entities_context`; new helpers `_format_speaker_block`, `_format_entity_sections`, `_dedup_memories`
+- `agent/memory/mindstream/mentions.py` — new `update_mention_resolution()`
+- `agent/memory/mindstream/social.py` — minimal fix to `find_person_candidates_by_name` so descriptor+anchor resolution works without raw_name
+- `agent/memory/__init__.py` — exports `update_mention_resolution`
 
-**What to build** — wire steps 2-7 into `_build_dynamic_suffix()` in `working_memory.py`:
+**Final wiring:**
 
 | Step | Action | Source | Status |
 |------|--------|--------|--------|
-| 1 | Call `_entities_check(message, sid, user_id)` per turn | `stream.py:144` | ✅ DONE |
-| 2 | Entity resolution: for each detected entity, call `resolve_person_mention()` | `social.py:627` | ❌ |
-| 3 | Miss → seed `ensure_known_person(person_id, interest_score=0.10)` | `social.py:143` | ❌ |
-| 4 | Hit → load `known_person` row + `get_relations(person_id)` | `social.py:134, :303` | ❌ |
-| 5 | Scoped Mem0 search: `search_person_relevant(user_id, person_id, message)` | `semantic.py:75` | ❌ |
-| 6 | Dedup against last 10 turns in history | `episodic.py` | ❌ |
-| 7 | Token-budgeted injection: `"Personas mencionadas: ..."` block | new formatting | ❌ |
-| -- | Uncomment + adapt user info/interest block (lines 89-108) | `working_memory.py:89` | ❌ |
+| 1 | Call `_entities_check(message, sid, user_id)` per turn | `stream.py:_entities_check` | ✅ |
+| 2 | Entity resolution: `resolve_person_mention()` per entity | `stream.py:_resolve_entities`, `social.py:627` | ✅ |
+| 3 | Miss → seed `ensure_known_person()` | nightly only (Block 5) | 🔵 deferred |
+| 4 | Hit → load `known_person` row + `get_relations(person_id)` | `stream.py:_resolve_entities` | ✅ |
+| 5 | Scoped Mem0 search: `search_person_relevant()` | `stream.py:_resolve_entities` | ✅ |
+| 6 | Dedup against last 10 turns in history | `working_memory.py:_dedup_memories` | ✅ |
+| 7 | Token-budgeted injection: `"Personas mencionadas: ..."` block | `working_memory.py:_format_entity_sections` | ✅ |
+| 8 | Persist resolution outcome to `person_mentions` | `mentions.py:update_mention_resolution` | ✅ |
+| 9 | `increment_person_mention(person_id)` per resolved entity | `stream.py:_finalize_turn` | ✅ |
+| -- | Uncomment + adapt user info/interest block | `working_memory.py:_format_speaker_block` | ✅ |
 
-**Format target:**
+**Guards added (not in original spec, surfaced during impl):**
+- **Self-mention drop:** entity resolves to speaker (`pid == user_id`) → flagged `is_self_mention=True`, skipped in injection (speaker block already covers it), still persisted.
+- **Assistant-leak guard:** entity anchored to Lumi/asistente AND pid == user_id → drop. Prevents the extractor from echoing Lumi's prior turn ("Buenas tardes, Jose") back as a third-party mention. Lumi-anchored mentions of *third parties* (e.g. "es el Jose Luis del trabajo?") still flow normally.
+
+**Out-of-scope variant (already mentioned, no profile yet):** `unknown` resolutions inject a single-line `[Sin perfil]` note (capped 3 per turn) so Lumi acknowledges new names gracefully without inventing context.
+
+**Format target (matches what ships):**
 ```
 Personas mencionadas en este turno:
 - Gloria (interés 0.62, tono cálido): madre de Jose. Estudia enfermería.
@@ -177,8 +203,6 @@ Memoria relevante:
 - Never resolve by global name alone — must anchor to speaker user_id via relations or alias
 - Only search Mem0 scoped (`search_person_relevant`) if `resolution.status == 'resolved'`
 - `interest_score` and `last_mentioned` are ordering hints only, never resolution signals
-
-**Files touched:** `agent/cognition/working_memory.py` (primary), `agent/cognition/stream.py` (minor — pass resolved entities to suffix builder)
 
 **Depends on:** nothing — all building blocks exist
 
@@ -303,12 +327,12 @@ Also wire `decay_inactive_people()` and `forget_stale_people()` if needed.
 ## Implementation Order (updated)
 
 ```
-Session 1: Block 1 — Complete entity recognition pipeline
-           → Wire resolve_person_mention() into _build_dynamic_suffix()
-           → Call search_person_relevant() for scoped Mem0
-           → Inject "Personas mencionadas" block + scoped memories
-           → Uncomment + adapt user info/interest block (lines 89-108)
-           → This is the bottleneck. Everything else feeds from here.
+Session 1: Block 1 — Complete entity recognition pipeline ✅ SHIPPED 2026-05-21
+           → resolve_person_mention() wired in stream._resolve_entities()
+           → search_person_relevant() called per resolved person
+           → "Personas mencionadas" block + [Posibles]/[Ambiguas]/[Sin perfil] sections
+           → Speaker block driven by get_known_person() (replaced legacy stub)
+           → mentions stamped with resolution outcome for nightly consolidation
 
 Session 2: Block 2 — Per-turn interest deltas
            → Wire increment_person_mention() + add_delta() into _finalize_turn()

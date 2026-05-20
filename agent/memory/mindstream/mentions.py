@@ -55,6 +55,34 @@ def add_mention(
     return dict(row) if row else None
 
 
+def update_mention_resolution(
+    mention_id: int,
+    status: str,
+    resolved_person_id: str | None = None,
+    candidates: list[dict] | None = None,
+) -> dict | None:
+    """Stamp resolution result on a previously-added mention row.
+    Leaves consolidation_status='pending' for nightly quiescence to pick up."""
+    conn = traces.get_conn()
+    now = datetime.now(UTC).isoformat()
+    candidates_json = json.dumps(candidates, ensure_ascii=False) if candidates else None
+    conn.execute(
+        """UPDATE person_mentions
+           SET resolution_status = ?,
+               resolved_person_id = ?,
+               candidates_json = ?,
+               resolved_at = ?
+           WHERE mention_id = ?""",
+        (status, resolved_person_id, candidates_json, now, mention_id),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM person_mentions WHERE mention_id = ?", (mention_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 def get_recent_mentions(hours_ago: float = 24.0, limit: int = 500) -> list[dict]:
     """Get mentions created in the last N hours, newest first."""
     cutoff = (datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat()
