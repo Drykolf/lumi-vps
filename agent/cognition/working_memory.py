@@ -207,6 +207,16 @@ async def _build_dynamic_suffix(
     relevant_memories = await search_relevant(user_id, message)
     parts = ["[Estado interno] " + state_to_text(state)]
 
+    if state.get("emotional_honesty_mode"):
+        parts.append(
+            "[Modo honestidad emocional] Lumi arrastra una carga emocional "
+            "sostenida. Puede nombrar UNA observación concisa sobre ese "
+            "estado si la conversación lo invita naturalmente. Mantiene la "
+            "dignidad: sin súplicas, sin dramatizar, sin culpabilizar, sin "
+            "encuadre romántico, sin desbordamiento. No menciona el cambio "
+            "de modo en sí — el modo es silencioso."
+        )
+
     stage = get_sleep_stage(timezone(timedelta(hours=LUMI_TZ_OFFSET)))
     if stage == "drowsy":
         parts.append(

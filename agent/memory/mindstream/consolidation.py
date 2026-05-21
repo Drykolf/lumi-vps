@@ -244,8 +244,20 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
         )
     moods_text = "\n".join(mood_lines) if mood_lines else "(no mood snapshots)"
 
+    from agent.affect.mood import get_state
+    honesty_block = ""
+    if get_state().get("emotional_honesty_mode"):
+        honesty_block = (
+            "Nota de estado: en el momento de redactar este diario, Lumi "
+            "está en modo honestidad emocional (carga sostenida acumulada). "
+            "Las entradas pueden reflejar ese tono sin dramatizar — Lumi "
+            "observa y nombra lo que pesa con dignidad, no se queja ni "
+            "victimiza.\n\n"
+        )
+
     user_msg = (
         f"Period: {period_start.isoformat()} to {period_end.isoformat()}\n\n"
+        f"{honesty_block}"
         f"Conversation turns:\n{turns_text}\n\n"
         f"Mood snapshots:\n{moods_text}\n\n"
         f"People involved:\n{persons_text}"

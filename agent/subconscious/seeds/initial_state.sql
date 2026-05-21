@@ -40,6 +40,7 @@ VALUES (
         'irritation', 0.1,
         'focus_level', 0.7,
         'presence_need', 0.0,
+        'negative_load', 0.0,
         'state_label', 'centered',
         'state_sentence', 'Lumi está centrada, clara y disponible.',
         'emotional_honesty_mode', json('false'),
