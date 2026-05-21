@@ -110,3 +110,73 @@ def get_user_mentions(user_id: str, limit: int = 100) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_pending() -> list[dict]:
+    """All mentions waiting for nightly consolidation, oldest first."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT * FROM person_mentions
+           WHERE consolidation_status = 'pending'
+           ORDER BY created_at ASC"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def mark_consolidated(mention_id: int) -> None:
+    """Stamp consolidation_status='consolidated' + consolidated_at=now."""
+    conn = traces.get_conn()
+    conn.execute(
+        """UPDATE person_mentions
+           SET consolidation_status = 'consolidated',
+               consolidated_at = ?
+           WHERE mention_id = ?""",
+        (datetime.now(UTC).isoformat(), mention_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_consolidation_status(mention_id: int, status: str) -> None:
+    """Set consolidation_status to one of: pending|consolidated|skipped|needs_review."""
+    conn = traces.get_conn()
+    conn.execute(
+        "UPDATE person_mentions SET consolidation_status = ? WHERE mention_id = ?",
+        (status, mention_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_mention(mention_id: int) -> None:
+    """Remove a mention row entirely. Used for anonymous/irrelevant mentions
+    that the nightly consolidator decides not to keep."""
+    conn = traces.get_conn()
+    conn.execute("DELETE FROM person_mentions WHERE mention_id = ?", (mention_id,))
+    conn.commit()
+    conn.close()
+
+
+def get_consolidated_grouped_by_person(person_ids: set[str]) -> dict[str, list[dict]]:
+    """Return all consolidated mentions for the given person_ids, grouped by
+    resolved_person_id. Empty set → empty dict."""
+    if not person_ids:
+        return {}
+    placeholders = ",".join("?" for _ in person_ids)
+    conn = traces.get_conn()
+    rows = conn.execute(
+        f"""SELECT * FROM person_mentions
+            WHERE consolidation_status = 'consolidated'
+              AND resolved_person_id IN ({placeholders})
+            ORDER BY created_at ASC""",
+        tuple(person_ids),
+    ).fetchall()
+    conn.close()
+
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        d = dict(r)
+        pid = d["resolved_person_id"]
+        grouped.setdefault(pid, []).append(d)
+    return grouped

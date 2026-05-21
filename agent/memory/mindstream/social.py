@@ -236,6 +236,74 @@ def list_active_known_persons(limit: int = 100) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def list_known_persons_minimal() -> list[dict]:
+    """Identity-only snapshot for the nightly entity consolidator's LLM payload.
+    Excludes forgotten persons. Returns columns needed for resolution decisions."""
+    conn = core.get_conn()
+    rows = conn.execute(
+        """SELECT person_id, display_name, canonical_name,
+                  canonical_name_norm, aliases_json, status, emotional_tone,
+                  interest_score
+           FROM known_persons
+           WHERE status != 'forgotten'
+           ORDER BY interest_score DESC"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def bump_mention(person_id: str, count: int = 1,
+                 last_seen_ts: str | None = None) -> dict | None:
+    """Increment mention_count by `count` and set last_mentioned. When
+    `last_seen_ts` is provided, uses it (ISO-8601 string); otherwise uses now.
+    Called only from nightly consolidation."""
+    if count <= 0:
+        return get_known_person(person_id)
+    conn = core.get_conn()
+    if last_seen_ts:
+        conn.execute(
+            """UPDATE known_persons
+               SET mention_count = mention_count + ?,
+                   last_mentioned = ?
+               WHERE person_id = ?""",
+            (count, last_seen_ts, person_id),
+        )
+    else:
+        conn.execute(
+            """UPDATE known_persons
+               SET mention_count = mention_count + ?,
+                   last_mentioned = datetime('now')
+               WHERE person_id = ?""",
+            (count, person_id),
+        )
+    conn.commit()
+    conn.close()
+    return get_known_person(person_id)
+
+
+def set_emotional_tone(person_id: str, tone: str) -> dict | None:
+    """Convenience wrapper around update_known_person for the nightly
+    interest consolidator. Allowed tones: positive, neutral, negative, complex,
+    warm, cold (free-form is permitted; see interest_policy.md)."""
+    return update_known_person(person_id, emotional_tone=tone)
+
+
+def list_relations_all(include_stale: bool = False) -> list[dict]:
+    """All relations in the graph. Used by the nightly entity consolidator
+    so the LLM can resolve descriptors like 'mi mamá' anchored to Jose."""
+    conn = core.get_conn()
+    status_filter = "" if include_stale else " WHERE status != 'stale'"
+    rows = conn.execute(
+        f"""SELECT relation_id, from_person_id, to_person_id, relation_type,
+                   relation_label, description, status, confidence,
+                   mention_count
+            FROM relations{status_filter}
+            ORDER BY from_person_id, to_person_id"""
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Person identifiers (messaging-platform handles -> person_id)
 # ═══════════════════════════════════════════════════════════════════════════════

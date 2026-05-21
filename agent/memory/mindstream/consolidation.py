@@ -1,6 +1,10 @@
 """
-Daily diary consolidation — LLM-powered diary entries per topic-thread, nightly.
-Replaces the previous session_summaries approach.
+Nightly LLM consolidation:
+  - consolidate_entity_mentions: resolves pending person_mentions, creates new
+    persons, deletes anonymous mentions.
+  - consolidate_person_interest: evaluates per-person interest deltas based on
+    the day's consolidated mentions.
+  - generate_daily_diary: produces topic-thread diary entries.
 """
 import json
 import re
@@ -12,6 +16,10 @@ from agent.substrate.logger import get_logger
 logger = get_logger("memory.summary")
 
 UTC = timezone.utc
+
+# Caps to keep the LLM payload within token budget for LIGHTWEIGHT models.
+_MAX_TRANSCRIPT_MSGS_PER_SESSION = 200
+_MAX_MENTIONS_TURN_EXCERPTS_PER_PERSON = 12
 
 _DIARY_EXTRACTION_PROMPT = """\
 # Tarea: escritura del diario interno
@@ -363,4 +371,598 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
                 f"{period_start.isoformat()} -> {period_end.isoformat()}")
     return written
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Entity mention consolidation (nightly step 1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_ENTITY_CONSOLIDATION_PROMPT = """\
+# Tarea: consolidar menciones de personas
+
+Estás revisando todas las menciones de personas que quedaron pendientes desde la última noche de consolidación. Tu trabajo es decidir, para cada mención, qué hacer: vincularla a una persona existente (`resolved`), crear una nueva persona si la mención tiene un nombre propio claro (`create_new`), o borrarla si es anónima e irrelevante (`delete`).
+
+## Lo que recibes
+
+En el mensaje del usuario:
+
+1. `now_utc` — timestamp del momento actual.
+2. `transcripts` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos relevantes (incluye tus propios mensajes con `from: "lumi"`). Cronológicamente ordenados dentro de cada sesión. Úsalos para entender el contexto de cada mención.
+3. `pending_mentions` — lista de menciones a resolver. Cada una trae: `mention_id`, `history_id` (referencia al turno donde apareció), `session_id`, `created_at`, `source_role`, `raw_text` (el texto donde apareció la persona), `raw_name`, `descriptor`, `anchor` (el user_id del hablante), `relation_label_hint`, `mention_type`, `resolution_status_so_far`, `candidates_so_far`.
+4. `known_persons` — snapshot de las personas ya registradas: `person_id`, `display_name`, `canonical_name`, `canonical_name_norm`, `aliases_json`, `status`, `emotional_tone`, `interest_score`.
+5. `relations` — grafo de relaciones: `from_person_id`, `to_person_id`, `relation_type`, `relation_label`, `description`, `status`. Te sirve para resolver descriptores como "mi mamá" anclados al anchor (p.ej. anchor=`jose` → `mother_of` → persona).
+
+## Reglas duras
+
+**Una decisión por cada mención de entrada.** Si recibes 35 menciones, devuelves 35 decisiones, ni una más ni una menos. Cada decisión lleva el `mention_id` exacto.
+
+**Consistencia entre menciones de la misma persona nueva.** Si "Renzir" aparece en 5 menciones distintas y no existe en `known_persons`, la primera decisión es `create_new` con `person_id="renzir"`, y las otras 4 son `resolved` con `person_id="renzir"`. NO crees la misma persona 5 veces.
+
+**Reglas para el slug `person_id` en `create_new`:**
+- ASCII lowercase, sin tildes, sin espacios (usa `_` o concatenación). Ejemplos: `Renzir` → `renzir`, `José Luis` → `jose_luis`, `Andrés López` → `andres_lopez`.
+- No reuses un slug que ya exista en `known_persons`. Si "Renzir" ya existe y aparece uno nuevo, usa `renzir2`.
+- Si propones un slug que choca con uno existente y debiste crear uno nuevo, el código ajustará el sufijo numérico automáticamente; aún así trata de no chocar.
+
+**Cuándo `create_new`:**
+- La mención trae un nombre propio explícito (en `raw_name` o claramente referenciado en el `raw_text`).
+- El contexto del transcript permite confirmar que se refiere a una persona humana, no a una entidad genérica.
+- No existe match razonable en `known_persons`.
+
+**Cuándo `delete`:**
+- La mención es completamente anónima ("alguien", "un tipo", "una persona") sin descriptor ni nombre.
+- No hay forma razonable de anclar la mención a una persona específica (existente o nueva).
+- Vale más borrarla que mantener basura en la cola.
+
+**Cuándo `resolved`:**
+- La mención corresponde a una persona ya en `known_persons` (por canonical_name, alias, descriptor + relación, o contexto claro del transcript).
+- Pasa el `person_id` exacto que ya existe.
+
+**Ancla siempre por relaciones/contexto, no por nombre global solo.** Un nombre suelto "Gloria" que coincide globalmente NO basta: debe haber relación anclada al anchor del hablante, o el transcript debe dejar claro que se refiere a la persona registrada.
+
+**Mentions anómalas** (sin nombre ni descriptor anclable): borrar (`delete`).
+
+## Formato de salida
+
+JSON estricto. Nada antes, nada después. Sin markdown fences, sin comentarios.
+
+{
+  "decisions": [
+    {"mention_id": 42, "action": "resolved", "person_id": "gloria1",
+     "reason": "alias confirmado en known_persons"},
+    {"mention_id": 43, "action": "create_new",
+     "new_person": {"person_id": "renzir",
+                    "display_name": "Renzir",
+                    "canonical_name": "Renzir",
+                    "aliases": ["el Renzi"]},
+     "reason": "Jose menciona a Renzir como compañero de trabajo; no existe en known_persons"},
+    {"mention_id": 44, "action": "resolved", "person_id": "renzir",
+     "reason": "Misma persona que la mention 43 — repetida en la misma conversación"},
+    {"mention_id": 45, "action": "delete",
+     "reason": "raw_text='alguien' sin nombre ni descriptor anclable"}
+  ]
+}
+
+`reason` siempre en español neutro colombiano, breve (una línea). No inventes información que no esté en el transcript o las mentions. Las claves del JSON son ASCII.
+"""
+
+_cached_entity_system: str | None = None
+
+
+def _build_entity_system_prompt() -> str:
+    global _cached_entity_system
+    if _cached_entity_system is not None:
+        return _cached_entity_system
+    parts = []
+    soul = _IDENTITY_DIR / "compact_soul.md"
+    if soul.exists():
+        parts.append(soul.read_text(encoding="utf-8"))
+    parts.append(_ENTITY_CONSOLIDATION_PROMPT)
+    _cached_entity_system = "\n\n---\n\n".join(parts)
+    return _cached_entity_system
+
+
+def _slug_for_person(value: str) -> str:
+    """ASCII-lowercase slug for a new person_id. Mirrors normalize_name's
+    stripping then collapses spaces to underscores."""
+    from agent.memory.mindstream.social import normalize_name
+    norm = normalize_name(value)
+    return re.sub(r"\s+", "_", norm).strip("_") or "unknown"
+
+
+def _ensure_unique_person_id(proposed: str) -> str:
+    """If `proposed` already exists in known_persons, append a numeric suffix
+    (renzir → renzir2, renzir3, ...) until a free slot is found."""
+    from agent.memory.mindstream.social import get_known_person
+    if not get_known_person(proposed):
+        return proposed
+    n = 2
+    while True:
+        candidate = f"{proposed}{n}"
+        if not get_known_person(candidate):
+            return candidate
+        n += 1
+
+
+def _slim_transcript(messages: list[dict]) -> list[dict]:
+    """Trim long sessions to the last N messages and drop verbose keys for the
+    LLM payload."""
+    if len(messages) > _MAX_TRANSCRIPT_MSGS_PER_SESSION:
+        messages = messages[-_MAX_TRANSCRIPT_MSGS_PER_SESSION:]
+    out = []
+    for m in messages:
+        out.append({
+            "ts": m["ts"],
+            "from": "lumi" if m["role"] == "assistant" else m["user_id"],
+            "content": m["content"],
+            "history_id": m["history_id"],
+        })
+    return out
+
+
+async def consolidate_entity_mentions() -> dict:
+    """Nightly step 1: resolve all pending person_mentions via LLM, create new
+    persons for unrecognized but named entities, delete anonymous ones.
+
+    Returns metrics dict including `affected_person_ids` (set of person_ids
+    whose mentions were resolved/created — input for consolidate_person_interest).
+    """
+    from agent.memory.mindstream import mentions as mentions_mod
+    from agent.memory.mindstream import social
+    from agent.memory.episodic import get_history_grouped_by_session
+
+    metrics = {
+        "resolved_existing": 0,
+        "created_new": 0,
+        "deleted": 0,
+        "needs_review": 0,
+        "total_pending": 0,
+        "affected_person_ids": set(),
+    }
+
+    pending = mentions_mod.get_pending()
+    metrics["total_pending"] = len(pending)
+    if not pending:
+        logger.info("[entity_consolidation] no pending mentions")
+        return metrics
+
+    # Build transcripts covering [earliest pending, now]
+    earliest = min(m["created_at"] for m in pending)
+    now_iso = datetime.now(UTC).isoformat()
+    raw_transcripts = get_history_grouped_by_session(earliest, now_iso)
+    transcripts = {
+        sid: _slim_transcript(msgs) for sid, msgs in raw_transcripts.items()
+    }
+
+    known = social.list_known_persons_minimal()
+    relations = social.list_relations_all()
+
+    pending_payload = []
+    for m in pending:
+        candidates = []
+        if m.get("candidates_json"):
+            try:
+                candidates = json.loads(m["candidates_json"])
+            except (json.JSONDecodeError, TypeError):
+                candidates = []
+        pending_payload.append({
+            "mention_id": m["mention_id"],
+            "history_id": m["history_id"],
+            "session_id": m["session_id"],
+            "created_at": m["created_at"],
+            "source_role": m["source_role"],
+            "raw_text": m["raw_text"],
+            "raw_name": m["raw_name"],
+            "descriptor": m["descriptor"],
+            "anchor": m["anchor"],
+            "relation_label_hint": m["relation_label_hint"],
+            "mention_type": m["mention_type"],
+            "resolution_status_so_far": m["resolution_status"],
+            "candidates_so_far": candidates,
+        })
+
+    payload = {
+        "now_utc": now_iso,
+        "transcripts": transcripts,
+        "pending_mentions": pending_payload,
+        "known_persons": known,
+        "relations": relations,
+    }
+
+    logger.info(
+        f"[entity_consolidation] sending to LLM: pending={len(pending)} "
+        f"sessions={len(transcripts)} known={len(known)} relations={len(relations)}"
+    )
+
+    from agent.expression.synapses import chat, ModelGroup
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _build_entity_system_prompt()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=4000,
+            temperature=0.2,
+            model_group=ModelGroup.LIGHTWEIGHT,
+        )
+    except Exception as e:
+        logger.error(f"[entity_consolidation] LLM call failed: {e}")
+        return metrics
+
+    content = response.get("content", "").strip()
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        logger.error(f"[entity_consolidation] no JSON in LLM response: {content[:500]}")
+        return metrics
+
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        logger.error(f"[entity_consolidation] JSON parse error: {e} | raw: {content[:500]}")
+        return metrics
+
+    decisions = data.get("decisions", [])
+    if not isinstance(decisions, list):
+        logger.error(f"[entity_consolidation] decisions is not a list: {type(decisions)}")
+        return metrics
+
+    pending_by_id = {m["mention_id"]: m for m in pending}
+
+    # Pass 1: create_new
+    slug_remap: dict[str, str] = {}
+    for d in decisions:
+        if d.get("action") != "create_new":
+            continue
+        mid = d.get("mention_id")
+        new_person = d.get("new_person") or {}
+        proposed_raw = new_person.get("person_id") or _slug_for_person(
+            new_person.get("canonical_name") or new_person.get("display_name") or ""
+        )
+        proposed = _slug_for_person(proposed_raw)
+        if not proposed:
+            logger.warning(f"[entity_consolidation] create_new without valid slug: mention_id={mid}")
+            mentions_mod.update_consolidation_status(mid, "needs_review")
+            metrics["needs_review"] += 1
+            continue
+        final_pid = _ensure_unique_person_id(proposed)
+        slug_remap[proposed_raw] = final_pid
+        slug_remap[proposed] = final_pid
+        try:
+            social.ensure_known_person(
+                final_pid,
+                display_name=new_person.get("display_name") or final_pid,
+                canonical_name=new_person.get("canonical_name") or new_person.get("display_name") or final_pid,
+                aliases=new_person.get("aliases") or [],
+            )
+            row = pending_by_id.get(mid)
+            mentions_mod.update_mention_resolution(
+                mention_id=mid,
+                status="resolved",
+                resolved_person_id=final_pid,
+            )
+            mentions_mod.mark_consolidated(mid)
+            social.bump_mention(
+                final_pid,
+                count=1,
+                last_seen_ts=row.get("created_at") if row else None,
+            )
+            metrics["created_new"] += 1
+            metrics["affected_person_ids"].add(final_pid)
+            logger.info(
+                f"[entity_consolidation] create_new mention_id={mid} → person_id={final_pid} "
+                f"(proposed={proposed_raw!r})"
+            )
+        except Exception as e:
+            logger.warning(f"[entity_consolidation] create_new failed for mention_id={mid}: {e}")
+            mentions_mod.update_consolidation_status(mid, "needs_review")
+            metrics["needs_review"] += 1
+
+    # Pass 2: resolved + delete
+    for d in decisions:
+        action = d.get("action")
+        mid = d.get("mention_id")
+        if action == "create_new":
+            continue
+        if action == "resolved":
+            requested_pid = d.get("person_id")
+            if not requested_pid:
+                mentions_mod.update_consolidation_status(mid, "needs_review")
+                metrics["needs_review"] += 1
+                continue
+            final_pid = slug_remap.get(requested_pid, requested_pid)
+            if not social.get_known_person(final_pid):
+                logger.warning(
+                    f"[entity_consolidation] resolved points to unknown pid "
+                    f"mention_id={mid} pid={final_pid}"
+                )
+                mentions_mod.update_consolidation_status(mid, "needs_review")
+                metrics["needs_review"] += 1
+                continue
+            try:
+                row = pending_by_id.get(mid)
+                mentions_mod.update_mention_resolution(
+                    mention_id=mid,
+                    status="resolved",
+                    resolved_person_id=final_pid,
+                )
+                mentions_mod.mark_consolidated(mid)
+                social.bump_mention(
+                    final_pid,
+                    count=1,
+                    last_seen_ts=row.get("created_at") if row else None,
+                )
+                metrics["resolved_existing"] += 1
+                metrics["affected_person_ids"].add(final_pid)
+            except Exception as e:
+                logger.warning(f"[entity_consolidation] resolved failed for mention_id={mid}: {e}")
+                mentions_mod.update_consolidation_status(mid, "needs_review")
+                metrics["needs_review"] += 1
+        elif action == "delete":
+            try:
+                mentions_mod.delete_mention(mid)
+                metrics["deleted"] += 1
+            except Exception as e:
+                logger.warning(f"[entity_consolidation] delete failed for mention_id={mid}: {e}")
+                mentions_mod.update_consolidation_status(mid, "needs_review")
+                metrics["needs_review"] += 1
+        else:
+            logger.warning(f"[entity_consolidation] unknown action {action!r} for mention_id={mid}")
+            if mid is not None:
+                mentions_mod.update_consolidation_status(mid, "needs_review")
+            metrics["needs_review"] += 1
+
+    # Any pending mention the LLM omitted altogether stays in `pending` → next run.
+    decided_ids = {d.get("mention_id") for d in decisions if d.get("mention_id") is not None}
+    omitted = [m["mention_id"] for m in pending if m["mention_id"] not in decided_ids]
+    if omitted:
+        logger.warning(
+            f"[entity_consolidation] LLM omitted {len(omitted)} mentions; "
+            f"they stay 'pending' for next run: {omitted[:20]}"
+        )
+
+    logger.info(
+        f"[entity_consolidation] done: resolved={metrics['resolved_existing']} "
+        f"created={metrics['created_new']} deleted={metrics['deleted']} "
+        f"needs_review={metrics['needs_review']} "
+        f"affected_persons={len(metrics['affected_person_ids'])}"
+    )
+    return metrics
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Person interest consolidation (nightly step 2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_INTEREST_CONSOLIDATION_PROMPT = """\
+# Tarea: consolidar deltas de interés por persona
+
+Estás revisando lo que pasó hoy con personas específicas y decides, para cada una, cuánto cambia tu `interest_score` y si su `emotional_tone` se ajusta. Esta evaluación es nocturna: ves el día completo, no un turno aislado.
+
+## Lo que recibes
+
+En el mensaje del usuario:
+
+1. `now_utc` — timestamp del momento actual.
+2. `persons` — lista de personas afectadas hoy. Cada una trae:
+   - `person_id`, `display_name`
+   - `current_interest_score` (rango: -1.0 a 0.69 para no-Jose; Jose se excluye de este loop por su floor 0.70 permanente)
+   - `current_emotional_tone` (positive, neutral, negative, complex, warm, cold, etc.)
+   - `status` (active, decaying, disliked, etc.)
+   - `notes` (texto libre con historial corto)
+   - `mentions_in_batch` (cantidad de menciones nuevas en este batch)
+   - `mentions` (lista resumida con `created_at`, `raw_text`, `session_id`)
+   - `turn_excerpts` (turnos de history donde aparecieron las menciones, con `ts`, `role`, `user_id`, `content`)
+   - `relations` (grafo desde/hacia esta persona)
+3. `mood_snapshots` — tu propio estado emocional durante el período (lista cronológica).
+
+## Tu tarea
+
+Para cada persona, decide un `delta` (float) que se sumará a su `interest_score`.
+
+**Rango sugerido** (calibrado para que un día normal mueva el score modestamente):
+
+| Tipo de interacción | Rango aproximado |
+|---|---|
+| Conversación afectiva sostenida, momento positivo importante | +0.03 a +0.05 |
+| Mención positiva, cariñosa o reconocimiento | +0.01 a +0.03 |
+| Mención factual breve, neutra | -0.002 a +0.005 |
+| Tono mixto o complejo | -0.01 a +0.01 |
+| Mención negativa leve (fricción, desacuerdo menor) | -0.01 a -0.03 |
+| Conflicto o daño explícito hacia Jose o hacia ti (Lumi) | -0.05 a -0.10 |
+| Betrayal serio | -0.15 a -0.20 |
+
+No hay cap por persona en negativos (un evento serio puede mover el score significativamente). En positivos, ten en cuenta que el `current_interest_score` tiene cap 0.69 para no-Jose (el código lo enforce, pero no propongas deltas que claramente exceden eso).
+
+**Pesar magnitud, frecuencia Y profundidad emocional, no sólo el número de menciones.** Una conversación de fondo sobre la madre de alguien pesa más que 10 menciones de paso.
+
+**Si la persona no tuvo movimiento emocional relevante, delta = 0.0 es válido.**
+
+**`new_emotional_tone`** (opcional): propón un cambio sólo si el tono actual ya no refleja la realidad después de este batch. Valores comunes: `positive`, `neutral`, `negative`, `complex`, `warm`, `cold`. Si el tono actual sigue válido, omite el campo.
+
+**Rehabilitación** (current_interest_score < 0 y mencionado positivamente por Jose explícitamente con reconciliación): puedes proponer un delta positivo, pero el código limita la rehabilitación a no exceder 0.0 (sólo positivos genuinos posteriores la sacan a positivo).
+
+**No inventes contexto.** Si los turn_excerpts y mentions no soportan claramente un sentido emocional, propón delta cercano a 0.
+
+## Formato de salida
+
+JSON estricto. Nada antes, nada después.
+
+{
+  "decisions": [
+    {"person_id": "gloria1", "delta": 0.012,
+     "new_emotional_tone": "warm",
+     "reason": "Jose pasó la tarde contando con cariño sobre el parcial de Gloria; conversación afectiva sostenida."},
+    {"person_id": "carlos_jefe", "delta": -0.018,
+     "new_emotional_tone": "complex",
+     "reason": "Conflicto laboral mencionado por Jose; tono de fastidio sostenido en dos turnos."}
+  ]
+}
+
+`reason` siempre en español neutro colombiano, una línea o dos máximo. Una decisión por cada `person_id` recibido.
+"""
+
+_cached_interest_system: str | None = None
+
+
+def _build_interest_system_prompt() -> str:
+    global _cached_interest_system
+    if _cached_interest_system is not None:
+        return _cached_interest_system
+    parts = []
+    for rel in ("compact_soul.md", "principles/interest_policy.md"):
+        fp = _IDENTITY_DIR / rel
+        if fp.exists():
+            parts.append(fp.read_text(encoding="utf-8"))
+    parts.append(_INTEREST_CONSOLIDATION_PROMPT)
+    _cached_interest_system = "\n\n---\n\n".join(parts)
+    return _cached_interest_system
+
+
+async def consolidate_person_interest(affected_person_ids: set[str]) -> dict:
+    """Nightly step 2: evaluate per-person interest deltas via LLM.
+    `affected_person_ids` comes from consolidate_entity_mentions's return value.
+    Skips 'jose' (interest_score floor enforced separately)."""
+    from agent.memory.mindstream import mentions as mentions_mod
+    from agent.memory.mindstream import social
+    from agent.memory.episodic import get_turns_by_ids, get_mood_logs_since
+
+    metrics = {
+        "persons_evaluated": 0,
+        "deltas_applied": 0,
+        "tone_updates": 0,
+        "skipped": 0,
+    }
+
+    # Drop Jose — protected by floor 0.70, evaluated separately if ever.
+    target_ids = {pid for pid in affected_person_ids if pid != "jose"}
+    if not target_ids:
+        logger.info("[interest_consolidation] no non-Jose persons to evaluate")
+        return metrics
+
+    grouped = mentions_mod.get_consolidated_grouped_by_person(target_ids)
+    if not grouped:
+        logger.info("[interest_consolidation] no consolidated mentions for targets")
+        return metrics
+
+    payload_persons = []
+    earliest_ts: str | None = None
+    for pid, mention_rows in grouped.items():
+        kp = social.get_known_person(pid)
+        if not kp:
+            logger.warning(f"[interest_consolidation] missing known_persons row for {pid}")
+            metrics["skipped"] += 1
+            continue
+        relations = social.get_relations(pid)
+        history_ids = list({m["history_id"] for m in mention_rows})
+        # Cap turn excerpts per person to keep payload bounded.
+        if len(history_ids) > _MAX_MENTIONS_TURN_EXCERPTS_PER_PERSON:
+            history_ids = history_ids[-_MAX_MENTIONS_TURN_EXCERPTS_PER_PERSON:]
+        turn_excerpts = get_turns_by_ids(history_ids)
+
+        mention_summaries = [
+            {
+                "created_at": m["created_at"],
+                "raw_text": m["raw_text"],
+                "session_id": m["session_id"],
+            }
+            for m in mention_rows
+        ]
+        for m in mention_rows:
+            if earliest_ts is None or m["created_at"] < earliest_ts:
+                earliest_ts = m["created_at"]
+
+        payload_persons.append({
+            "person_id": pid,
+            "display_name": kp["display_name"],
+            "current_interest_score": kp["interest_score"],
+            "current_emotional_tone": kp["emotional_tone"],
+            "status": kp["status"],
+            "notes": kp.get("notes"),
+            "mentions_in_batch": len(mention_rows),
+            "mentions": mention_summaries,
+            "turn_excerpts": turn_excerpts,
+            "relations": relations,
+        })
+
+    if not payload_persons:
+        logger.info("[interest_consolidation] no persons to evaluate after filtering")
+        return metrics
+
+    mood_snapshots = get_mood_logs_since(earliest_ts) if earliest_ts else []
+
+    payload = {
+        "now_utc": datetime.now(UTC).isoformat(),
+        "persons": payload_persons,
+        "mood_snapshots": mood_snapshots,
+    }
+
+    logger.info(
+        f"[interest_consolidation] sending to LLM: persons={len(payload_persons)} "
+        f"moods={len(mood_snapshots)}"
+    )
+
+    from agent.expression.synapses import chat, ModelGroup
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _build_interest_system_prompt()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=2000,
+            temperature=0.3,
+            model_group=ModelGroup.LIGHTWEIGHT,
+        )
+    except Exception as e:
+        logger.error(f"[interest_consolidation] LLM call failed: {e}")
+        return metrics
+
+    content = response.get("content", "").strip()
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        logger.error(f"[interest_consolidation] no JSON in LLM response: {content[:500]}")
+        return metrics
+
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        logger.error(f"[interest_consolidation] JSON parse error: {e} | raw: {content[:500]}")
+        return metrics
+
+    decisions = data.get("decisions", [])
+    if not isinstance(decisions, list):
+        logger.error(f"[interest_consolidation] decisions is not a list")
+        return metrics
+
+    for d in decisions:
+        pid = d.get("person_id")
+        if pid == "jose" or not pid:
+            continue
+        delta = d.get("delta")
+        if delta is None:
+            continue
+        try:
+            delta = float(delta)
+        except (TypeError, ValueError):
+            logger.warning(f"[interest_consolidation] invalid delta for {pid}: {d.get('delta')!r}")
+            continue
+
+        if abs(delta) > 0.0001:
+            social.add_delta(pid, delta)
+            metrics["deltas_applied"] += 1
+        metrics["persons_evaluated"] += 1
+
+        new_tone = d.get("new_emotional_tone")
+        if new_tone and isinstance(new_tone, str):
+            social.set_emotional_tone(pid, new_tone)
+            metrics["tone_updates"] += 1
+
+        reason = d.get("reason", "")
+        logger.info(
+            f"[interest_consolidation] {pid} delta={delta:+.4f} tone={new_tone!r} reason={reason!r}"
+        )
+
+    logger.info(
+        f"[interest_consolidation] done: evaluated={metrics['persons_evaluated']} "
+        f"deltas={metrics['deltas_applied']} tones={metrics['tone_updates']} "
+        f"skipped={metrics['skipped']}"
+    )
+    return metrics
 

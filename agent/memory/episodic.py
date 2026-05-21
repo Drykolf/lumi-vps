@@ -225,6 +225,88 @@ async def write_diary_entry(
     return row_id
 
 
+def get_history_grouped_by_session(start_ts: str, end_ts: str) -> dict[str, list[dict]]:
+    """Return history rows in [start_ts, end_ts) grouped by session_id, each
+    list ordered chronologically. Used by nightly consolidation to feed
+    transcripts to the LLM."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT id, user_id, role, content, session_id, ts
+           FROM history
+           WHERE ts >= ? AND ts < ?
+           ORDER BY ts ASC""",
+        (start_ts, end_ts),
+    ).fetchall()
+    conn.close()
+
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        sid = r[4]
+        grouped.setdefault(sid, []).append({
+            "history_id": r[0],
+            "user_id": r[1],
+            "role": r[2],
+            "content": r[3],
+            "ts": r[5],
+        })
+    return grouped
+
+
+def get_turns_by_ids(history_ids: list[int]) -> list[dict]:
+    """Fetch specific history rows by id, chronologically ordered. Empty list
+    on empty input."""
+    if not history_ids:
+        return []
+    placeholders = ",".join("?" for _ in history_ids)
+    conn = traces.get_conn()
+    rows = conn.execute(
+        f"""SELECT id, user_id, role, content, session_id, ts
+            FROM history
+            WHERE id IN ({placeholders})
+            ORDER BY ts ASC""",
+        tuple(history_ids),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "history_id": r[0],
+            "user_id": r[1],
+            "role": r[2],
+            "content": r[3],
+            "session_id": r[4],
+            "ts": r[5],
+        }
+        for r in rows
+    ]
+
+
+def get_mood_logs_since(start_ts: str) -> list[dict]:
+    """Mood snapshots since a given UTC ISO-8601 timestamp, chronological."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT ts, mood_valence, mood_energy, irritation, focus_level,
+                  presence_need, state_label, emotional_honesty_mode
+           FROM mood_logs
+           WHERE ts >= ?
+           ORDER BY ts ASC""",
+        (start_ts,),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "ts": r[0],
+            "mood_valence": r[1],
+            "mood_energy": r[2],
+            "irritation": r[3],
+            "focus_level": r[4],
+            "presence_need": r[5],
+            "state_label": r[6],
+            "emotional_honesty_mode": bool(r[7]),
+        }
+        for r in rows
+    ]
+
+
 async def read_recent_diary_entries(
     user_id: str | None = None,
     limit: int = 7,

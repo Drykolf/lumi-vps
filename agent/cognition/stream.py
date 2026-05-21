@@ -20,7 +20,6 @@ from agent.memory import (
     resolve_person_mention,
     get_known_person,
     get_relations,
-    increment_person_mention,
     search_person_relevant,
 )
 from agent.affect import init_state_table, touch_last_interaction
@@ -245,11 +244,9 @@ def _finalize_turn(
             )
         except Exception as e:
             logger.warning(f"[finalize] update_mention_resolution failed: {e}")
-        if ctx.get("status") == "resolved" and ctx.get("person_id"):
-            try:
-                increment_person_mention(ctx["person_id"])
-            except Exception as e:
-                logger.warning(f"[finalize] increment_person_mention failed: {e}")
+        # mention_count / last_mentioned on known_persons are bumped by the
+        # nightly consolidator (consolidate_entity_mentions). Per-turn we only
+        # persist the raw + resolved mention row.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -23,6 +23,9 @@ from agent.memory.episodic import (
     add_mood_log,
     write_diary_entry,
     read_recent_diary_entries,
+    get_history_grouped_by_session,
+    get_turns_by_ids,
+    get_mood_logs_since,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -49,7 +52,11 @@ from agent.memory.mindstream.social import (
     ensure_known_person,
     update_known_person,
     increment_person_mention,
+    bump_mention,
     list_active_known_persons,
+    list_known_persons_minimal,
+    list_relations_all,
+    set_emotional_tone,
     normalize_name,
     parse_aliases,
     build_alias,
@@ -62,13 +69,22 @@ from agent.memory.mindstream.social import (
     PersonResolution,
     ResolutionStatus,
 )
-from agent.memory.mindstream.consolidation import generate_daily_diary
+from agent.memory.mindstream.consolidation import (
+    generate_daily_diary,
+    consolidate_entity_mentions,
+    consolidate_person_interest,
+)
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
     add_mention,
     update_mention_resolution,
     get_recent_mentions,
     get_user_mentions,
+    get_pending,
+    mark_consolidated,
+    update_consolidation_status,
+    delete_mention,
+    get_consolidated_grouped_by_person,
 )
 
 # Backward compat alias
@@ -103,7 +119,11 @@ __all__ = [
     "ensure_known_person",
     "update_known_person",
     "increment_person_mention",
+    "bump_mention",
     "list_active_known_persons",
+    "list_known_persons_minimal",
+    "list_relations_all",
+    "set_emotional_tone",
     "normalize_name",
     "parse_aliases",
     "build_alias",
@@ -116,6 +136,8 @@ __all__ = [
     "PersonResolution",
     "ResolutionStatus",
     "generate_daily_diary",
+    "consolidate_entity_mentions",
+    "consolidate_person_interest",
     "cleanup_history",
     "cleanup_mood_logs",
     "cleanup_heartbeat_runs",
@@ -124,7 +146,15 @@ __all__ = [
     "update_mention_resolution",
     "get_recent_mentions",
     "get_user_mentions",
+    "get_pending",
+    "mark_consolidated",
+    "update_consolidation_status",
+    "delete_mention",
+    "get_consolidated_grouped_by_person",
     "add_mood_log",
     "write_diary_entry",
     "read_recent_diary_entries",
+    "get_history_grouped_by_session",
+    "get_turns_by_ids",
+    "get_mood_logs_since",
 ]
