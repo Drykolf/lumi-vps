@@ -104,3 +104,4 @@ Four jobs registered at startup (`agent/rhythm/heartbeat.py`), all in COL/UTC-5:
 from agent.cognition import attention   # correct
 from .cognition import attention        # will fail
 ```
+No hacer pruebas, no hacer comandos en consola, indicarq cuando necesite algo asi.

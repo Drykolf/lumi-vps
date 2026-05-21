@@ -136,6 +136,51 @@ BEGIN
 END;
 
 -- ============================================================
+-- PERSON_IDENTIFIERS — messaging-platform handles for known persons
+-- ============================================================
+-- One row per (person_id, platform, identifier). Platform 'whatsapp' stores
+-- the E.164 phone number (same number also reachable via SMS/voice — the
+-- inbound transport is recorded per-request as ChatRequest.channel).
+-- New platforms (telegram, signal, ...) are added by extending the CHECK.
+CREATE TABLE IF NOT EXISTS person_identifiers (
+    identifier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    person_id TEXT NOT NULL,
+
+    platform TEXT NOT NULL,
+    identifier TEXT NOT NULL,
+
+    verified INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+
+    first_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CHECK (platform IN ('whatsapp', 'discord')),
+    CHECK (verified IN (0, 1)),
+    UNIQUE (platform, identifier),
+
+    FOREIGN KEY (person_id)
+        REFERENCES known_persons(person_id)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_person_identifiers_person_id
+    ON person_identifiers(person_id);
+
+CREATE INDEX IF NOT EXISTS idx_person_identifiers_lookup
+    ON person_identifiers(platform, identifier);
+
+CREATE TRIGGER IF NOT EXISTS trg_person_identifiers_updated_at
+AFTER UPDATE ON person_identifiers
+FOR EACH ROW
+BEGIN
+    UPDATE person_identifiers
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE identifier_id = OLD.identifier_id;
+END;
+
+-- ============================================================
 -- LUMI_STATE — Lumi's own dynamic internal state
 -- ============================================================
 -- Single-row key/value to keep the schema flexible.

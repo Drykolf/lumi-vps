@@ -237,6 +237,108 @@ def list_active_known_persons(limit: int = 100) -> list[dict]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Person identifiers (messaging-platform handles -> person_id)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Platform 'whatsapp' stores the E.164 phone number (the same number is also
+# reachable via SMS / voice — the inbound transport is per-request in
+# ChatRequest.channel). 'discord' stores the Discord user snowflake as text.
+# Identifier format is caller's responsibility — store E.164 ('+57...') for
+# whatsapp, snowflake string for discord.
+
+_VALID_IDENTIFIER_PLATFORMS = {"whatsapp", "discord"}
+
+
+def add_identifier(person_id: str, platform: str, identifier: str,
+                   verified: bool = False,
+                   notes: str | None = None) -> dict | None:
+    """Idempotent insert. Re-asserting an existing (platform, identifier)
+    touches last_seen but does NOT rebind person_id — if the identifier
+    already maps to a different person, the original mapping is preserved
+    and the caller must explicitly remove_identifier first."""
+    if platform not in _VALID_IDENTIFIER_PLATFORMS:
+        raise ValueError(f"unknown platform: {platform!r}")
+
+    conn = core.get_conn()
+    conn.execute(
+        """INSERT INTO person_identifiers
+           (person_id, platform, identifier, verified, notes)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(platform, identifier) DO UPDATE SET
+               last_seen = CURRENT_TIMESTAMP""",
+        (person_id, platform, identifier, 1 if verified else 0, notes),
+    )
+    conn.commit()
+    row = conn.execute(
+        """SELECT * FROM person_identifiers
+           WHERE platform = ? AND identifier = ?""",
+        (platform, identifier),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_identifier(platform: str, identifier: str) -> dict | None:
+    """Hot path for inbound message routing. Returns the known_persons row
+    joined with identifier metadata (verified, identifier_id) in a single
+    query, or None if the identifier is unmapped."""
+    conn = core.get_conn()
+    row = conn.execute(
+        """SELECT kp.*,
+                  pi.identifier_id,
+                  pi.platform,
+                  pi.identifier,
+                  pi.verified,
+                  pi.first_seen AS identifier_first_seen,
+                  pi.last_seen  AS identifier_last_seen
+           FROM person_identifiers pi
+           JOIN known_persons kp USING (person_id)
+           WHERE pi.platform = ? AND pi.identifier = ?""",
+        (platform, identifier),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_identifiers_for_person(person_id: str) -> list[dict]:
+    conn = core.get_conn()
+    rows = conn.execute(
+        """SELECT * FROM person_identifiers
+           WHERE person_id = ?
+           ORDER BY platform, first_seen""",
+        (person_id,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def verify_identifier(identifier_id: int) -> dict | None:
+    conn = core.get_conn()
+    conn.execute(
+        "UPDATE person_identifiers SET verified = 1 WHERE identifier_id = ?",
+        (identifier_id,),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM person_identifiers WHERE identifier_id = ?",
+        (identifier_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def remove_identifier(identifier_id: int) -> bool:
+    conn = core.get_conn()
+    cur = conn.execute(
+        "DELETE FROM person_identifiers WHERE identifier_id = ?",
+        (identifier_id,),
+    )
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Relations (relation_policy.md, new schema with relation_label/status/confidence)
 # ═══════════════════════════════════════════════════════════════════════════════
 

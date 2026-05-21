@@ -9,6 +9,12 @@ from dotenv import load_dotenv
 from agent.cognition.stream import run, run_stream
 from agent.perception.websocket import on_connect, connected_users, start_heartbeat
 from agent.memory import get_user_information, set_user_information
+from agent.memory.mindstream.social import (
+    add_identifier,
+    ensure_known_person,
+    get_identifier,
+    get_known_person,
+)
 from agent.substrate.logger import get_logger, configure_root
 from agent.subconscious import init_databases
 import agent.rhythm.heartbeat as scheduler
@@ -28,6 +34,24 @@ app = FastAPI(title="LUMI VPS", version="0.4.0", root_path="/lumi")
 def verify_key(x_api_key: str):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+_DIRECT_CHANNELS = {"desktop", "web"}
+
+
+class UnknownInboundUser(Exception):
+    """Inbound whatsapp/discord identifier not mapped to a known person."""
+
+
+def resolve_inbound_user_id(channel: str, raw_user_id: str) -> str:
+    if channel in _DIRECT_CHANNELS:
+        return raw_user_id
+    row = get_identifier(channel, raw_user_id)
+    if row is None:
+        raise UnknownInboundUser(
+            f"inbound {channel} identifier {raw_user_id!r} is not mapped to a known person"
+        )
+    return row["person_id"]
 
 
 class ChatRequest(BaseModel):
@@ -53,6 +77,18 @@ class UserProfileRequest(BaseModel):
     description: str = ""
     metadata: dict = {}
 
+
+class MapContactRequest(BaseModel):
+    user_id: str
+    platform: Literal["whatsapp", "discord"]
+    identifier: str
+
+
+class CreatePersonRequest(BaseModel):
+    user_id: str
+    display_name: str
+    notes: str | None = None
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -69,6 +105,12 @@ async def health():
 @app.post("/v1/chat")
 async def chat(req: ChatRequest, x_api_key: str = Header(...)):
     verify_key(x_api_key)
+
+    try:
+        person_id = resolve_inbound_user_id(req.channel, req.user_id)
+    except UnknownInboundUser as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
     metadata = {
         "source": req.source,
         "channel": req.channel,
@@ -79,11 +121,11 @@ async def chat(req: ChatRequest, x_api_key: str = Header(...)):
     }
     if req.stream:
         return StreamingResponse(
-            run_stream(req.user_id, req.content, metadata),
+            run_stream(person_id, req.content, metadata),
             media_type="text/plain"
         )
     else:
-        reply = await run(req.user_id, req.content, metadata)
+        reply = await run(person_id, req.content, metadata)
         return {"reply": reply}
 
 
@@ -97,6 +139,64 @@ async def observe(req: ObserveRequest, x_api_key: str = Header(...)):
     logger.info(f"[observe] user={req.user_id} source={req.source} len={len(req.content)}")
     # TODO Fase 4: mem0.save(user_id, req.content, type="passive_observation")
     return {"status": "ok", "user_id": req.user_id}
+
+
+# ── Person management ─────────────────────────────────────────────────────────
+# Admin endpoints: create a known_person row, then attach platform identifiers
+# so that inbound messages from those identifiers resolve in /v1/chat.
+
+@app.post("/v1/create-person")
+async def create_person(req: CreatePersonRequest, x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+    person = ensure_known_person(
+        req.user_id,
+        display_name=req.display_name,
+        notes=req.notes,
+    )
+    logger.info(f"[create-person] person_id={req.user_id} display_name={req.display_name!r}")
+    return {
+        "person_id": person["person_id"],
+        "display_name": person["display_name"],
+        "status": person["status"],
+        "notes": person.get("notes"),
+    }
+
+
+@app.post("/v1/map-contact")
+async def map_contact(req: MapContactRequest, x_api_key: str = Header(...)):
+    verify_key(x_api_key)
+
+    person = get_known_person(req.user_id)
+    if person is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"person_id={req.user_id!r} does not exist; "
+                f"create it first via POST /v1/create-person"
+            ),
+        )
+
+    existing = get_identifier(req.platform, req.identifier)
+    if existing and existing["person_id"] != req.user_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"identifier {req.identifier!r} on {req.platform} is already mapped "
+                f"to person_id={existing['person_id']!r}"
+            ),
+        )
+
+    row = add_identifier(req.user_id, req.platform, req.identifier, verified=True)
+    logger.info(
+        f"[map-contact] person_id={req.user_id} {req.platform}={req.identifier}"
+    )
+    return {
+        "person_id": req.user_id,
+        "display_name": person["display_name"],
+        "platform": row["platform"],
+        "identifier": row["identifier"],
+        "verified": bool(row["verified"]),
+    }
 
 
 # ── Bridge ────────────────────────────────────────────────────────────────────
