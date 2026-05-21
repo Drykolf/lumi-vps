@@ -15,6 +15,7 @@ Execution order (each step depends on the previous one having a stable view):
 from datetime import datetime, timezone, timedelta
 from agent.rhythm.state import rhythm_task
 from agent.substrate.logger import get_logger
+from agent.substrate.nightly_log import NightlyLog
 
 logger = get_logger("rhythm.quiescence")
 UTC = timezone.utc
@@ -22,16 +23,47 @@ UTC = timezone.utc
 
 async def nightly_quiescence() -> None:
     """Deep nightly maintenance at 3am COT."""
+    log = NightlyLog("nightly_quiescence")
     async with rhythm_task("nightly_quiescence"):
-        entity_metrics = await consolidate_entity_mentions()
-        affected = entity_metrics.get("affected_person_ids", set())
-        await consolidate_person_interest(affected)
+        affected: set[str] = set()
+
+        try:
+            entity_metrics = await consolidate_entity_mentions()
+            log.section(
+                "consolidate_entity_mentions",
+                total_pending=entity_metrics["total_pending"],
+                resolved_existing=entity_metrics["resolved_existing"],
+                created_new=entity_metrics["created_new"],
+                deleted=entity_metrics["deleted"],
+                needs_review=entity_metrics["needs_review"],
+                affected_person_ids=entity_metrics["affected_person_ids"],
+            )
+            affected = entity_metrics.get("affected_person_ids", set())
+        except Exception as e:
+            logger.exception("[quiescence] consolidate_entity_mentions failed")
+            log.error("consolidate_entity_mentions", e)
+
+        try:
+            interest_metrics = await consolidate_person_interest(affected)
+            log.section(
+                "consolidate_person_interest",
+                persons_evaluated=interest_metrics["persons_evaluated"],
+                deltas_applied=interest_metrics["deltas_applied"],
+                tone_updates=interest_metrics["tone_updates"],
+                skipped=interest_metrics.get("skipped", 0),
+            )
+        except Exception as e:
+            logger.exception("[quiescence] consolidate_person_interest failed")
+            log.error("consolidate_person_interest", e)
+
         await update_profiles(affected)
         await update_relations(affected)
         await consolidate_daily_memories()
         await extract_daily_learnings()
         await cleanup_memory_tiers()
         await analyze_daily_tasks()
+
+        log.note("--- run complete ---")
 
 
 # ── Step 1 ─────────────────────────────────────────────────────────────────────
