@@ -46,6 +46,7 @@ Reglas:
 -Excluye referencias a entidades no humanas como empresas, juegos, apps, productos, eventos, etc.
 -Excluye referencias vagas como "alguien", "un amigo", "una persona", etc. salvo que tengan un descriptor claro como "un amigo de la universidad", "alguien de la oficina", etc.
 -Excluye referencias a Lumi como "Lumi", "la asistente", "mi asistente", etc.
+-Excluye referencias al receptor como "tu", "ti", "te", "usted", etc.
 Formato:
 [
   {

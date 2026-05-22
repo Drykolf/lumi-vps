@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Query, Depends
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect, Query, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Literal
@@ -136,9 +136,54 @@ async def chat(req: ChatRequest, x_api_key: str = Header(...)):
 @app.post("/v1/observe")
 async def observe(req: ObserveRequest, x_api_key: str = Header(...)):
     verify_key(x_api_key)
+    #logger.info(req.dict())
     logger.info(f"[observe] user={req.user_id} source={req.source} len={len(req.content)}")
     # TODO Fase 4: mem0.save(user_id, req.content, type="passive_observation")
     return {"status": "ok", "user_id": req.user_id}
+
+
+# ── WhatsApp webhook (Evolution API) ──────────────────────────────────────────
+
+from agent.presence.conduits.whatsapp import (
+    Skip,
+    is_authorized,
+    parse_inbound,
+    send_text,
+)
+
+
+@app.post("/v1/chat/whatsapp")
+async def whatsapp_webhook(request: Request):
+    try:
+        payload = await request.json()
+    except Exception as e:
+        raw = await request.body()
+        logger.warning(f"[whatsapp-webhook] non-json body ({e}): {raw!r}")
+        return {"status": "ignored", "reason": "non-json"}
+
+    if not is_authorized(payload):
+        logger.warning("[whatsapp-webhook] invalid apikey")
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    parsed = parse_inbound(payload)
+    if isinstance(parsed, Skip):
+        return {"status": "ignored", "reason": parsed.reason}
+
+    logger.info(
+        f"[whatsapp-webhook] inbound person_id={parsed.person_id} "
+        f"instance={parsed.instance} session_id={parsed.metadata['session_id']} "
+        f"text={parsed.text!r}"
+    )
+
+    reply = await run(parsed.person_id, parsed.text, parsed.metadata)
+    #reply = "hola, soy Lumi"
+    try:
+        await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"[whatsapp-webhook] sendText failed: {e}")
+        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
+
+    return {"status": "ok", "person_id": parsed.person_id}
 
 
 # ── Person management ─────────────────────────────────────────────────────────
