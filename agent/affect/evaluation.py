@@ -201,22 +201,21 @@ def _build_eval_context(
     Build (system_prompt, user_message) for the LLM mood evaluation call.
 
     System = compact_soul.md + mood_policy.md + MOOD_EVAL_PROMPT
-    User   = timestamp + mood state + involved people + transcript
+    User   = timestamp + mood state + involved people + transcript grouped by session
     """
+    from agent.cognition.working_memory import format_turns_grouped
+
     system_prompt = _get_system_prefix() + "\n\n---\n\n" + MOOD_EVAL_PROMPT
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC)
+    now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    lines = []
-    for m in messages:
-        name = "Lumi" if m.get("role") == "assistant" else (m.get("user_id") or m.get("role", "desconocido"))
-        lines.append(f"{name}: {m.get('content', '')}")
-    transcript = "\n".join(lines)
+    transcript = format_turns_grouped(messages, current_session_id=None, now=now)
 
     involved_block = "# TODO" if not involved_people else json.dumps(involved_people, ensure_ascii=False)
 
     user_msg = (
-        f"Current timestamp: {now}\n\n"
+        f"Current timestamp: {now_str}\n\n"
         "Current mood state:\n"
         f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
         f"#Involved people:\n#{involved_block}\n\n"

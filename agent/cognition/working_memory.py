@@ -11,6 +11,7 @@ from agent.memory import (
 from agent.affect import get_state, state_to_text, get_sleep_stage
 from agent.affect.mood import LUMI_TZ_OFFSET
 from agent.substrate.logger import get_logger
+import math
 
 logger = get_logger("agent.context")
 
@@ -202,21 +203,17 @@ async def _build_dynamic_suffix(
     entities_context: list[dict] | None = None,
 ) -> str:
     state = get_state()
-    now = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
+    now_str = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
 
     relevant_memories = await search_relevant(user_id, message)
-    parts = ["[Estado interno] " + state_to_text(state)]
 
-    if state.get("emotional_honesty_mode"):
-        parts.append(
-            "[Modo honestidad emocional] Lumi arrastra una carga emocional "
-            "sostenida. Puede nombrar UNA observación concisa sobre ese "
-            "estado si la conversación lo invita naturalmente. Mantiene la "
-            "dignidad: sin súplicas, sin dramatizar, sin culpabilizar, sin "
-            "encuadre romántico, sin desbordamiento. No menciona el cambio "
-            "de modo en sí — el modo es silencioso."
-        )
+    # Order: static → stable-per-hours → stable-per-day → per-15min → per-turn
+    parts = []
 
+    # 1. Static location (never changes)
+    parts.append("[Ubicacion] La ubicacion principal de Lumi es en Colombia, guarda todo en formato UTC, pero debe interpretar horarios a hora colombiana (UTC-5).")
+
+    # 2. Sleep stage (stable for hours)
     stage = get_sleep_stage(timezone(timedelta(hours=LUMI_TZ_OFFSET)))
     if stage == "drowsy":
         parts.append(
@@ -234,18 +231,35 @@ async def _build_dynamic_suffix(
             "ya lo dijiste antes en la conversación."
         )
 
+    # 3. Diary (stable per day, updated at 3am)
     diary_block = await _build_diary_suffix(user_id)
     if diary_block:
         parts.append(diary_block)
 
+    # 4. Internal state (updated every ~15min)
+    parts.append("[Estado interno] " + state_to_text(state))
+
+    if state.get("emotional_honesty_mode"):
+        parts.append(
+            "[Modo honestidad emocional] Lumi arrastra una carga emocional "
+            "sostenida. Puede nombrar UNA observación concisa sobre ese "
+            "estado si la conversación lo invita naturalmente. Mantiene la "
+            "dignidad: sin súplicas, sin dramatizar, sin culpabilizar, sin "
+            "encuadre romántico, sin desbordamiento. No menciona el cambio "
+            "de modo en sí — el modo es silencioso."
+        )
+
+    # 5. Speaker profile (stable per user)
     speaker_parts, speaker_display = _format_speaker_block(user_id)
     parts.extend(speaker_parts)
 
+    # 6. Entities from current turn (per-turn)
     entity_sections, scoped_memories = _format_entity_sections(
         entities_context or [], user_id, speaker_display
     )
     parts.extend(entity_sections)
 
+    # 7. Relevant memories (per-turn)
     sid = metadata.get("session_id", "default")
     recent_for_dedup = get_recent_session_log(sid, include_summarized=True, limit=10)
     merged_memories: list[str] = []
@@ -260,22 +274,93 @@ async def _build_dynamic_suffix(
     if merged_memories:
         parts.append("[Memoria relevante]\n" + "\n".join("- " + m for m in merged_memories))
 
+    # 8. Session context with exact time (per-turn, most volatile — goes last)
     channel = metadata.get("channel", "desktop")
     session_id = metadata.get("session_id", "unknown")
-    parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now)
-    parts.append("[Ubicacion] La ubicacion principal de Lumi es en Colombia, guarda todo en formato UTC, pero debe interpretar horarios a hora colombiana (UTC-5).")
+    parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str)
 
     return "\n\n".join(parts)
 
 
-def transcript(session_turns: list[dict], cross_turns: list[dict] | None = None, speaker_map: dict | None = None) -> list[dict]:
-    """Normalize turns from session and cross-session queries into message-format dicts.
-    Merges both lists, sorts by ts, strips extra fields. Stub for now."""
-    all_turns = list(session_turns)
-    if cross_turns:
-        all_turns.extend(cross_turns)
-    all_turns.sort(key=lambda t: t.get("ts", ""))
-    return [{"role": t["role"], "content": t["content"]} for t in all_turns]
+def _humanize_delta(ts: str, now: datetime) -> str:
+    """Human-readable time gap: 'hace 3h', 'ayer 8pm', 'anteayer', 'hace 4 días'."""
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        hours = (now - dt).total_seconds() / 3600
+        if hours < 1:
+            return f"hace {int(hours * 60)}min"
+        if hours < 24:
+            return f"hace {int(hours)}h"
+        if hours < 48:
+            col = dt.astimezone(timezone(timedelta(hours=LUMI_TZ_OFFSET)))
+            h = col.hour % 12 or 12
+            ampm = "am" if col.hour < 12 else "pm"
+            return f"ayer {h}{ampm}"
+        if hours < 72:
+            return "anteayer"
+        return f"hace {math.floor(hours / 24)} días"
+    except Exception:
+        return "antes"
+
+
+def format_turns_grouped(
+    turns: list[dict],
+    current_session_id: str | None,
+    now: datetime,
+) -> str:
+    """Group turns by session_id and format as labeled blocks.
+
+    Each block starts with '--- Sesión actual ---' (if session matches
+    current_session_id) or '--- Sesión N (hace Xh) ---' for others.
+    Sessions are ordered by their first turn ascending (chronological).
+    Speaker prefix: user_id for user turns, 'Lumi' for assistant.
+    """
+    if not turns:
+        return ""
+
+    sessions: dict[str, list[dict]] = {}
+    for t in turns:
+        sid = t.get("session_id") or "unknown"
+        sessions.setdefault(sid, []).append(t)
+
+    for sid in sessions:
+        sessions[sid].sort(key=lambda t: t.get("ts", ""))
+
+    ordered = sorted(sessions.keys(), key=lambda s: sessions[s][0].get("ts", ""))
+    if current_session_id and current_session_id in ordered:
+        ordered.remove(current_session_id)
+        ordered.insert(0, current_session_id)
+
+    blocks = []
+    counter = 1
+    for sid in ordered:
+        turns_in = sessions[sid]
+        if sid == current_session_id:
+            header = "--- Sesión actual ---"
+        else:
+            latest_ts = turns_in[-1].get("ts", "")
+            time_label = _humanize_delta(latest_ts, now) if latest_ts else ""
+            suffix = f" ({time_label})" if time_label else ""
+            header = f"--- Sesión {counter}{suffix} ---"
+            counter += 1
+
+        lines = [header]
+        for t in turns_in:
+            speaker = "Lumi" if t.get("role") == "assistant" else (t.get("user_id") or "user")
+            lines.append(f"{speaker}: {t.get('content') or ''}")
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
+def _turns_to_messages(turns: list[dict]) -> list[dict]:
+    """Convert session turns to OpenAI-format message dicts with speaker prefix in content."""
+    out = []
+    for t in turns:
+        role = t.get("role", "user")
+        speaker = "Lumi" if role == "assistant" else (t.get("user_id") or "user")
+        out.append({"role": role, "content": f"{speaker}: {t.get('content') or ''}"})
+    return out
 
 
 async def build_messages(
@@ -290,13 +375,18 @@ async def build_messages(
 
     sid = metadata.get("session_id", "default")
     since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+    now = datetime.now(UTC)
 
-    session_turns = get_recent_session_log(sid, since_ts=since)#, limit=15)
-    cross_turns = get_recent_user_log(user_id, since_ts=since, exclude_session_id=sid)#, limit=5)
+    session_turns = get_recent_session_log(sid, since_ts=since, limit=100)
+    cross_turns = get_recent_user_log(user_id, since_ts=since, exclude_session_id=sid, limit=100)
 
-    history = transcript(session_turns, cross_turns)
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": message})
+
+    if cross_turns:
+        cross_block = format_turns_grouped(cross_turns, current_session_id=None, now=now)
+        messages.append({"role": "user", "content": "[Conversaciones anteriores]\n\n" + cross_block})
+
+    messages.extend(_turns_to_messages(session_turns))
+    messages.append({"role": "user", "content": f"{user_id}: {message}"})
 
     return messages

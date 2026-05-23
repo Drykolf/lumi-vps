@@ -237,11 +237,12 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     persons_text = "\n".join(person_lines) if person_lines else "(none)"
 
     # 3. Build user message: period bounds + conversation turns + mood snapshots + people
-    turn_lines = []
-    for r in history_rows:
-        role_label = "assistant" if r[2] == "assistant" else "user"
-        turn_lines.append(f"[{r[5]}] {role_label} ({r[1]}): {r[3]}")
-    turns_text = "\n".join(turn_lines)
+    from agent.cognition.working_memory import format_turns_grouped
+    history_dicts = [
+        {"role": r[2], "user_id": r[1], "session_id": r[4], "ts": r[5], "content": r[3]}
+        for r in history_rows
+    ]
+    turns_text = format_turns_grouped(history_dicts, current_session_id=None, now=datetime.now(UTC))
 
     mood_lines = []
     for m in mood_rows:

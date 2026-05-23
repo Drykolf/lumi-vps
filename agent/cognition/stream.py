@@ -282,7 +282,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
     logger.info(f"[entities] detected {len(entities)} entities with context: {[{'raw_text': e.get('raw_text','')[:30], 'status': c.get('status'), 'person_id': c.get('person_id')} for e, c in zip(entities, entities_context)]}")
     messages = await build_messages(user_id, message, metadata, entities_context=entities_context)
 
-    tool, args = await intention.decide_tool(sid, message)#, prompt_cache_key=CACHE_KEY_TOOL)
+    tool, args = await intention.decide_tool(sid, message, user_id=user_id)#, prompt_cache_key=CACHE_KEY_TOOL)
     if tool and args is not None:
         tool_call = [{"function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}]
         tool_results = await intention.execute(tool_call, user_id)

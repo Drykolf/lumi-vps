@@ -29,7 +29,7 @@ def has_tool_calls(message: dict) -> bool:
 
 # ── Lightweight tool check ─────────────────────────────────────────────────────
 
-async def _tool_check(sid: str, message: str, prompt_cache_key: str | None = None) -> str | None:
+async def _tool_check(sid: str, message: str, user_id: str = "user", prompt_cache_key: str | None = None) -> str | None:
     """Returns tool name if one is needed, None otherwise. ~500 tokens."""
     all_schemas_ = all_schemas()
     if not all_schemas_:
@@ -41,16 +41,16 @@ async def _tool_check(sid: str, message: str, prompt_cache_key: str | None = Non
         desc = s["function"].get("description", name)
         tool_lines.append(f"  '{name}': {desc}")
 
-    turns = get_recent_session_log(sid, include_summarized=True, limit=10)
-    transcript = ""
-    for t in turns:
-        role = "Jose" if t["role"] == "user" else "Lumi"
-        transcript += f"{role}: {t['content']}\n"
-    transcript += f"Jose: {message}"
-
     tools_text = "\n".join(tool_lines)
 
-    prompt = (
+    turns = get_recent_session_log(sid, include_summarized=True, limit=6)
+    transcript = ""
+    for t in turns:
+        speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)
+        transcript += f"{speaker}: {t['content']}\n"
+    transcript += f"{user_id}: {message}"
+
+    system_prompt = (
         "Eres el router de herramientas de Lumi.\n"
         "Tu tarea NO es responder al usuario. Tu única tarea es decidir si antes de responder "
         "hace falta llamar una herramienta.\n\n"
@@ -58,9 +58,6 @@ async def _tool_check(sid: str, message: str, prompt_cache_key: str | None = Non
         "Herramientas disponibles, formato nombre: descripción.\n"
         "Usa el nombre EXACTO de la herramienta. No traduzcas nombres.\n\n"
         f"{tools_text}\n\n"
-
-        "Contexto reciente de la conversación:\n"
-        f"{transcript}\n\n"
 
         "Salida obligatoria, exactamente una línea:\n"
         "- SI:nombre_exacto\n"
@@ -120,8 +117,8 @@ async def _tool_check(sid: str, message: str, prompt_cache_key: str | None = Non
     try:
         response = await chat(
             messages=[
-                {"role": "system", "content": prompt},
-                #{"role": "user", "content": transcript},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript},
             ],
             max_tokens=20,
             temperature=0.1,
@@ -202,9 +199,9 @@ async def _formulate_query(message: str, tool_name: str, sid: str, prompt_cache_
     return None
 
 
-async def decide_tool(sid: str, message: str, prompt_cache_key: str | None = None) -> tuple[str | None, dict | None]:
+async def decide_tool(sid: str, message: str, user_id: str = "user", prompt_cache_key: str | None = None) -> tuple[str | None, dict | None]:
     """One-stop: check if tool needed + generate args. Returns (tool_name, args)."""
-    tool = await _tool_check(sid, message, prompt_cache_key=prompt_cache_key)
+    tool = await _tool_check(sid, message, user_id=user_id, prompt_cache_key=prompt_cache_key)
     if tool:
         args = await _formulate_query(message, tool, sid, prompt_cache_key=prompt_cache_key)
         return tool, args

@@ -122,9 +122,9 @@ def get_recent_user_log(user_id: str, since_ts: str | None = None,
     """Retorna los ultimos turnos de un usuario a traves de sesiones.
     since_ts (ISO UTC) filtra desde esa marca temporal.
     exclude_session_id excluye una sesion especifica (para cross-session).
-    Retorna role, content, session_id, ts en orden cronologico."""
+    Retorna role, content, user_id, session_id, ts en orden cronologico."""
     conn = traces.get_conn()
-    columns = "role, content, session_id, ts"
+    columns = "role, content, user_id, session_id, ts"
     where = f"user_id = ?{' AND summarized = 0' if not include_summarized else ''}"
     params = [user_id]
 
@@ -137,7 +137,7 @@ def get_recent_user_log(user_id: str, since_ts: str | None = None,
         params.append(exclude_session_id)
 
     rows = conn.execute(
-        f"""SELECT role, content, session_id, ts FROM (
+        f"""SELECT role, content, user_id, session_id, ts FROM (
                 SELECT id, {columns} FROM history
                 WHERE {where}
                 ORDER BY id DESC
@@ -147,7 +147,7 @@ def get_recent_user_log(user_id: str, since_ts: str | None = None,
     ).fetchall()
 
     conn.close()
-    return [{"role": r[0], "content": r[1], "session_id": r[2], "ts": r[3]} for r in rows]
+    return [{"role": r[0], "content": r[1], "user_id": r[2], "session_id": r[3], "ts": r[4]} for r in rows]
 
 
 def mark_memory_evaluated(max_id: int):
