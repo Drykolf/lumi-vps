@@ -10,6 +10,8 @@ from openai import RateLimitError, APIStatusError
 from agent.expression.providers.qwen3_5_35b import Qwen3_5_35B
 from agent.expression.providers.step_3_5_flash import Step3_5Flash
 from agent.expression.providers.nemotron_super_120b import NemotronSuper120B
+from agent.expression.providers.qwen3_235b_a22b import Qwen3_235B_A22B
+from agent.expression.providers.gemma_4_26b_a4b import Gemma4_26B_A4B
 from agent.expression.providers.mistral import Mistral
 from agent.expression.providers.deepseek import DeepSeek
 from agent.expression.providers.qwen_9b import Qwen9B
@@ -24,8 +26,10 @@ class ModelGroup(Enum):
 
 # ── Registries de modelos en orden de prioridad ───────────────────────────────
 _MAIN_MODELS = [
+    Gemma4_26B_A4B(),
     Qwen3_5_35B(),
     Step3_5Flash(),
+    Qwen3_235B_A22B(),
     NemotronSuper120B(),
 ]
 

@@ -2,11 +2,13 @@
 
 **Proyecto:** LUMI (Listening Unified Memory Intelligence)
 **Autor del proyecto:** Jose Barco
-**Versión del manual:** 2.2
-**Fecha:** 7 de mayo 2026
-**Generado por:** OpenCode (actualización de arquitectura)
+**Versión del manual:** 2.4
+**Fecha:** 23 de mayo 2026
+**Generado por:** Claude Code (actualización de arquitectura)
 
-> **Nota de versión (v2.2):** esta revisión sincroniza el manual con el código real en `lumi-vps`. Cambios principales: (1) estructura de directorios actualizada de `vps/` → `src/` y aclaración de que este repo es solo el backend VPS, (2) modelo LLM actualizado a Qwen3.5-35B-A3B con cadena de fallback de 3 modelos y documentación de quirks `extra_body`, (3) arquitectura Mem0 corregida: sin Apache AGE, pgvector nativo maneja entity linking, Neo4j opcional, (4) estado de features de Fase 3-4 actualizado para reflejar implementación real vs placeholder, (5) modelo de estado interno simplificado a 3 campos string reales, (6) perfil viviente documentado como placeholder actual con diseño completo planificado. Se preserva todo el contenido de v2.1 no afectado por estos cambios.
+> **Nota de versión (v2.4):** correcciones puntuales a 23 de mayo 2026. Cambios: (1) `lumi_soul.md` y `attitude.md` reescritos en formato compacto (~118 y ~284 líneas respectivamente) — sección 6.2 actualizada para reflejar contenido real de cada archivo; (2) `Qwen/Qwen3-235B-A22B-Instruct-2507` es el model ID correcto (con sufijo `-Instruct-2507`), su `extra_body` es `{"top_k": 20}` sin `chat_template_kwargs`; (3) `google/gemma-4-26b-a4b` sí acepta `reasoning_effort` como parámetro top-level (no como `extra_body`); (4) estimación del cached prefix ajustada a ~2,200-2,700 tokens; (5) providers `gemma_4_26b_a4b.py` y `qwen3_235b_a22b.py` ahora en el repo y referenciados en `synapses.py`; (6) `.architecture/LUMI_Group_Participation_Policy.md` eliminado — las reglas de grupo fueron absorbidas en `attitude.md`. Se preserva todo el contenido de v2.3 no afectado por estos cambios.
+
+> **Nota de versión (v2.3):** sincronización completa con el código real en `lumi-vps` a 23 de mayo 2026. Cambios principales: (1) estructura de directorios reescrita — el proyecto usa `agent/` como raíz (no `src/`), con módulos renombrados: `presence/app.py`, `cognition/stream.py`, `cognition/working_memory.py`, `cognition/attention.py`, `cognition/intention.py`, `expression/synapses.py`, `faculties/`, `affect/mood.py`, `perception/websocket.py`, `subconscious/`, `identity/` — ver sección 4, (2) grupo MAIN de modelos ampliado de 3 a 5: `Gemma4_26B_A4B` es ahora primario, Qwen3.5-35B-A3B es segundo, Step-3.5-Flash tercero, se agregó Qwen3_235B_A22B y Nemotron-120B como últimos fallbacks, (3) archivos de personalidad: de `lumi_card.json` (Character Card V3) a `lumi_soul.md` + `attitude.md` (markdown), (4) modelo de estado interno enriquecido a 8 campos numéricos + sleep stages + negative_load — ya no son 3 strings, (5) bases de datos: `data/traces.db` (historial) y `data/core.db` (estado, personas), (6) features de Fase 4 actualizadas: perfil viviente (read-path), interest deltas nocturnos, emotional honesty mode, entity resolution, diario nocturno, mood evaluation — todos SHIPPED, (7) quiescencia nocturna documentada con 8 pasos (2 wired, 6 stubs), (8) loop del agente corregido: exactamente 1 tool call por turno (no iterativo), (9) removidas todas las referencias a Apache AGE — nunca usado. Se preserva todo el contenido de v2.2 no afectado por estos cambios.
 
 ---
 
@@ -80,39 +82,49 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 ### 2.1 Diagrama de bloques
 
 ```
-┌─────────────────────────────────────┐         ┌──────────────────────────────────────┐
-│  PC LOCAL (Windows 11)              │         │  VPS CONTABO (Ubuntu 24.04)          │
-│  ─────────────────────              │         │  ──────────────────────              │
-│                                     │         │                                      │
-│                                     │         │  Caddy (HTTPS, reverse proxy)        │
-│                                     │         │       │                              │
-│                                     │         │       ▼                              │
-│                                     │         │  FastAPI: src/main.py                │
-│                                     │         │  ├─ Clasificador web search          │
-│                                     │         │  ├─ Routing por user_id              │
-│                                     │         │  ├─ Construcción de contexto         │
-│                                     │         │  ├─ Cadena de fallback 3 modelos     │
-│                                     │         │  │  (Qwen35B→Step→Nemotron)          │
-│                                     │         │  ├─ Tool calling loop (max 10 iter)  │
-│                                     │         │  └─ Stream de respuesta              │
-│                                     │         │       │                              │
-│                                     │         │       ▼                              │
-│                                     │         │  Mem0 REST API (mem0_server/)         │
-│                                     │         │  ├─ pgvector (host:5432)             │
-│                                     │         │  ├─ Entity linking nativo            │
-│                                     │         │  └─ Neo4j opcional (--profile graph) │
-│                                     │         │  Brave Search API (free tier)        │
-│                                     │         │  DeepInfra (3 modelos con fallback)  │
-│                                     │         │                                      │
-│                                     │         │  Canales adicionales (fase 6+):      │
-│                                     │         │  ├─ Evolution API (WhatsApp)         │
-│                                     │         │  └─ discord.py bot                   │
-│                                     │         │                                      │
-│                                     │         │  Endpoints:                          │
-│                                     │         │  ├─ POST /v1/chat  (respuesta)       │
-│                                     │         │  ├─ POST /v1/observe (aprender solo) │
-│                                     │         │  └─ WSS /v1/bridge (MCP local calls) │
-└─────────────────────────────────────┘         └──────────────────────────────────────┘
+┌─────────────────────────────────────┐         ┌────────────────────────────────────────────────┐
+│  PC LOCAL (Windows 11)              │         │  VPS CONTABO (Ubuntu 24.04)                    │
+│  ─────────────────────              │         │  ──────────────────────                        │
+│                                     │         │                                                │
+│                                     │         │  Caddy (HTTPS, reverse proxy)                  │
+│                                     │         │       │                                        │
+│                                     │         │       ▼                                        │
+│                                     │         │  FastAPI: agent/presence/app.py (v0.4.0)        │
+│                                     │         │  ├─ cognition/attention.py  Keyword classifier │
+│                                     │         │  ├─ cognition/stimulus.py    Message handlers  │
+│                                     │         │  ├─ cognition/intention.py  Tool check (1/turn)│
+│                                     │         │  ├─ cognition/working_memory.py  Prompt builder│
+│                                     │         │  ├─ cognition/stream.py    Orquestador central │
+│                                     │         │  ├─ expression/synapses.py  LLM factory (5+3)  │
+│                                     │         │  │  MAIN: Gemma4→Qwen35B→Step→Qwen235B→Nemotron│
+│                                     │         │  │  LIGHTWEIGHT: Mistral→DeepSeek→Qwen9B       │
+│                                     │         │  └─ Stream de respuesta                        │
+│                                     │         │       │                                        │
+│                                     │         │       ▼                                        │
+│                                     │         │  Mem0 REST API (mem0_server/)                   │
+│                                     │         │  ├─ pgvector (host:5432)                       │
+│                                     │         │  ├─ Entity linking en pgvector (nativo)        │
+│                                     │         │  └─ Neo4j opcional (--profile graph)           │
+│                                     │         │  Brave Search API (free tier)                  │
+│                                     │         │  DeepInfra (5 modelos MAIN + 3 LIGHTWEIGHT)    │
+│                                     │         │  Bases de datos:                               │
+│                                     │         │  ├─ data/traces.db (historial, diario, sesión) │
+│                                     │         │  └─ data/core.db (estado, personas, relaciones)│
+│                                     │         │  APScheduler (rhythm/heartbeat.py)              │
+│                                     │         │  ├─ 15min tick: mood check + idle decay        │
+│                                     │         │  ├─ 7am daily: morning mood reset              │
+│                                     │         │  ├─ 3am nightly: 8-step quiescence             │
+│                                     │         │  └─ Mon 4am: weekly cleanup + decay            │
+│                                     │         │                                                │
+│                                     │         │  Canales adicionales (fase 6+):                │
+│                                     │         │  ├─ Evolution API (WhatsApp)                   │
+│                                     │         │  └─ discord.py bot                             │
+│                                     │         │                                                │
+│                                     │         │  Endpoints:                                    │
+│                                     │         │  ├─ POST /v1/chat  (respuesta)                 │
+│                                     │         │  ├─ POST /v1/observe (aprender solo)           │
+│                                     │         │  └─ WSS /v1/bridge (MCP local calls)           │
+└─────────────────────────────────────┘         └────────────────────────────────────────────────┘
 ```
 
 ### 2.2 Flujo de datos completo (canal voz, conversación normal)
@@ -123,14 +135,16 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 3. LumiAgent.chat(BatchInput) recibe el texto
 4. Wake detector custom evalúa: ¿está la ventana abierta o contiene "Lumi"?
 5. Check de conectividad al VPS → si falla, modo dormida
-6. Si pasa los filtros → POST https://vps:443/v1/chat con metadatos
+6. Si pasa los filtros → POST https://vps:443/lumi/v1/chat con metadatos
 7. VPS:
-   a. Clasificador keywords decide si necesita Brave Search o tools remotos
-   b. Recupera memoria relevante de Mem0 por user_id
-   c. Construye contexto estructurado: [CACHED PREFIX][dynamic suffix]
-   d. POST a DeepInfra Qwen3.5 con prompt caching
-   e. Si hay tool calls: ejecuta (en VPS o vía MCP Bridge al PC), itera
-   f. Stream la respuesta hacia el cliente
+   a. `attention.classify()` — keyword router decide: chat, web_search, long_task, explicit_save
+   b. `_entities_check()` — LLM ligero detecta menciones de terceros en el mensaje
+   c. `_resolve_entities()` — resuelve personas contra known_persons + Mem0 scoped search
+   d. `build_messages()` — construye sistema prompt: [CACHED PREFIX lumi_soul.md + attitude.md][dynamic suffix]
+   e. `intention.decide_tool()` — 1 tool check ligero por turno (NO iterativo)
+   f. POST a DeepInfra vía `expression/synapses.py` con fallback de 5 modelos MAIN
+   g. Stream la respuesta hacia el cliente
+   h. `_finalize_turn()` — guarda turnos + persiste menciones resueltas
 8. LumiAgent local recibe el stream
 9. Parsea emotion tag inicial → activa expresión Live2D vía OLV decorators
 10. Si hay interrupción del usuario → engage interrupt handler (feature #19)
@@ -159,9 +173,9 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 ### 2.4 Decisiones arquitectónicas clave
 
 | Decisión | Elección | Razón |
-|---|---|---|---|
+|---|---|---|---|---|---|
 | Cerebro local vs remoto | **Remoto (VPS)** | Multi-canal, gaming compatible, memoria centralizada |
-| LLM principal | **Qwen3.5-35B-A3B + 2 fallbacks vía DeepInfra** | Cadena de 3 modelos con exponential backoff. Mejor precio/calidad, tool calling nativo |
+| LLM principal | **Gemma4 26B + 4 fallbacks vía DeepInfra** | Cadena de 5 modelos MAIN con exponential backoff. Mejor precio/calidad, tool calling nativo |
 | Fallback sin internet | **Lumi dormida** (sin LLM local) | Coherencia del personaje > disponibilidad parcial |
 | GPU local | **100% para gaming** | No hay inferencia LLM local en ninguna fase |
 | Memoria | **Mem0 + pgvector (Neo4j opcional)** | Mem0 v2.0.0: entity linking nativo en pgvector. Neo4j disponible vía `--profile graph` |
@@ -172,8 +186,10 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 | Búsqueda web | **Brave Search API** + clasificador keywords | Free tier suficiente, baja latencia |
 | Observación pasiva | **Screenpipe (pantalla) + always-on ASR** | Local, MIT, event-driven. Planificado, no wireado aún |
 | MCP | **Híbrido: VPS + Bridge local** | Tools de web/datos en VPS; tools de sistema en local vía WebSocket |
-| Filosofía del agente | **Ultra-ligero** | Loop + contexto + herramientas + memoria en `src/agent/` |
-| Personalidad en prompt | **Card completo cacheado en módulo** | `get_cached_prefix()` en `src/agent/context.py` |
+| Filosofía del agente | **Ultra-ligero** | Loop + contexto + herramientas + memoria en `agent/cognition/` |
+| Personalidad en prompt | **Dos markdown files cacheados** | `get_cached_prefix()` carga `lumi_soul.md` + `attitude.md` |
+| Bases de datos | **data/traces.db + data/core.db** | SQLite: historial conversacional, diario, estado interno, personas, relaciones |
+| Scheduler | **APScheduler** | 4 jobs: 15min tick, 7am morning, 3am nightly (8 pasos), Mon 4am weekly |
 
 ---
 
@@ -184,36 +200,50 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 **Modelos activos (orden de prioridad con exponential backoff):**
 
 | Prioridad | Modelo | Rol |
-|---|---|---|
-| 1 (primario) | **Qwen/Qwen3.5-35B-A3B** | Uso principal |
-| 2 (fallback) | stepfun-ai/Step-3.5-Flash | Si Qwen está saturado |
-| 3 (fallback) | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B | Último recurso |
+|---|---|---|---|
+| 1 (primario) | **google/gemma-4-26b-a4b** | Uso principal |
+| 2 (fallback) | Qwen/Qwen3.5-35B-A3B | Si Gemma4 está saturado |
+| 3 (fallback) | stepfun-ai/Step-3.5-Flash | Tercera opción |
+| 4 (fallback) | Qwen/Qwen3-235B-A22B-Instruct-2507 | Cuarta opción |
+| 5 (fallback) | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B | Último recurso |
 
-Todos vía DeepInfra (`DEEPINFRA_API_KEY`, base URL `https://api.deepinfra.com/v1/openai`). La fábrica LLM en `src/agent/llm.py` prueba cada modelo en orden, con 2 reintentos por modelo (exponential backoff: 2^attempt segundos). Si los 3 fallan, lanza `RuntimeError`.
+**Grupo LIGHTWEIGHT** (tool check, entity detection, memory extraction — ~200-500 tokens):
+
+| Prioridad | Modelo | Rol |
+|---|---|---|---|
+| 1 | mistralai/Mistral-Small-3.2-24B-Instruct-2506 | Primario |
+| 2 | deepseek-ai/DeepSeek-V4-Flash | Fallback |
+| 3 | Qwen/Qwen3.5-9B | Último recurso |
+
+Todos vía DeepInfra (`DEEPINFRA_API_KEY`, base URL `https://api.deepinfra.com/v1/openai`). La fábrica LLM en `agent/expression/synapses.py` prueba cada modelo en orden, con 2 reintentos por modelo (exponential backoff: 2^attempt segundos). Si todos fallan, lanza `RuntimeError`.
 
 **⚠️ Quirk crítico — `extra_body` por modelo:**
 
 Cada modelo espera parámetros diferentes en `extra_body`. Si se usa el incorrecto, la API falla:
 
 | Modelo | `extra_body` | Nota |
-|---|---|---|
+|---|---|---|---|
+| google/gemma-4-26b-a4b | *(sin `extra_body`)* | No acepta `chat_template_kwargs`; sí acepta `reasoning_effort` como parámetro top-level |
 | Qwen/Qwen3.5-35B-A3B | `{"top_k": 20, "chat_template_kwargs": {"enable_thinking": bool}}` | Soporta modo thinking |
 | stepfun-ai/Step-3.5-Flash | `{"reasoning_effort": "none"}` | NO acepta `chat_template_kwargs` |
+| Qwen/Qwen3-235B-A22B-Instruct-2507 | `{"top_k": 20}` | Solo `top_k`; esta versión no usa `chat_template_kwargs` |
 | NVIDIA-Nemotron-120B | *(sin `extra_body`)* | No acepta ninguno de los anteriores |
+| mistralai/Mistral-Small-24B | `{"reasoning_effort": "none"}` | Solo cuando `thinking=False` |
+| deepseek-ai/DeepSeek-V4-Flash | `{"reasoning_effort": "none"}` | Solo cuando `thinking=False` |
+| Qwen/Qwen3.5-9B | `{"top_k": 20, "chat_template_kwargs": {"enable_thinking": bool}}` | Misma familia Qwen |
 
-Los wrappers individuales en `src/llm/` (uno por modelo) encapsulan estas diferencias. Al agregar un modelo nuevo, el `extra_body` debe coincidir exactamente con lo que el proveedor espera.
+Los wrappers individuales en `agent/expression/providers/` (uno por modelo) encapsulan estas diferencias. Al agregar un modelo nuevo, el `extra_body` debe coincidir exactamente con lo que el proveedor espera.
 
 **Caching de prompt:**
 
-DeepInfra soporta prompt caching para Qwen. El system prompt (card de personalidad, ~2,500 tokens) se cachea automáticamente con ~90% de descuento sobre el costo de input. El TTL es de 5-10 minutos de inactividad. La estructura del prompt es disciplinada: todo lo estable al inicio (cached), todo lo variable al final. Ver sección 6 para la composición.
+DeepInfra soporta prompt caching. El system prompt (personalidad, ~2,500 tokens) se cachea automáticamente con ~90% de descuento sobre el costo de input. El TTL es de 5-10 minutos de inactividad. La estructura del prompt es disciplinada: todo lo estable al inicio (cached), todo lo variable al final. Ver sección 6 para la composición.
 
-**Por qué Qwen3.5-35B-A3B como primario:**
+**Por qué Gemma4 26B como primario (nuevo en v2.3):**
 
-- Arquitectura híbrida (Gated Delta Networks + MoE) — alta calidad
-- 262K contexto nativo
-- Modo thinking opcional (activado con `chat_template_kwargs.enable_thinking`)
+- Arquitectura MoE — calidad alta con eficiencia
+- 4M contexto nativo
+- Excelente soporte multilingüe, español first-class
 - Tool calling nativo OpenAI-compatible
-- 201 idiomas, español first-class
 - Prompt caching reduce el costo del card grande
 
 **Lo que sigue sin ofrecer DeepInfra:**
@@ -292,14 +322,15 @@ La configuración activa en `mem0_server/main.py` incluye únicamente:
 
 **Neo4j** permanece en `docker-compose.yml` como servicio opcional (perfil `graph`) para casos donde se necesite consulta de grafos explícita, pero no es parte del pipeline de memoria estándar.
 
-**Memoria de dos niveles:**
+**Memoria de tres niveles:**
 
 | Nivel | Backend | Propósito |
 |---|---|---|
-| Historial conversacional | SQLite (`src/schemas/logs.db`) | Turno-a-turno, acceso secuencial, últimos N turnos |
-| Memoria semántica | Mem0 + pgvector (host:8100) | Hechos, personas, conocimiento persistente |
+| Historial conversacional | SQLite (`data/traces.db`, vía `agent/memory/episodic.py`) | Turno-a-turno, acceso secuencial, últimos N turnos |
+| Memoria semántica | Mem0 + pgvector (host:8100, vía `agent/memory/semantic.py`) | Hechos, personas, conocimiento persistente |
+| Estado interno | SQLite (`data/core.db`, vía `agent/subconscious/`) | Estado de Lumi, personas conocidas, relaciones, interest scores |
 
-Esta separación es intencional: el historial secuencial no pertenece a Mem0 porque es acceso temporal, no semántico. El código en `src/agent/memory.py` es una fachada que loop.py y context.py importan; la implementación real está en `src/memory/mem0_client.py`.
+Esta separación es intencional: el historial secuencial no pertenece a Mem0 porque es acceso temporal, no semántico. El código en `agent/memory/__init__.py` es la fachada pública que el loop importa.
 
 **Embedder:** `BAAI/bge-m3` vía DeepInfra — multilingüe, óptimo para español, 1024 dimensiones.
 
@@ -308,9 +339,9 @@ Esta separación es intencional: el historial secuencial no pertenece a Mem0 por
 ### 3.7 Búsqueda web: Brave Search API
 
 - Free tier: 2,000 requests/mes — suficiente para uso personal intenso
-- Activación: clasificador keywords pre-LLM en `lumi_agent_server.py`
+- Activación: clasificador keywords pre-LLM en `agent/cognition/attention.py`
 
-**Mecanismo recomendado para búsqueda web (híbrido en cascada):**
+**Mecanismo implementado (híbrido en cascada):**
 
 | Capa | Método | Latencia | Costo | Precisión |
 |---|---|---|---|---|
@@ -368,7 +399,7 @@ El regex + Semantic Router captura ~80-90% de los casos. El LLM maneja los casos
 
 ## 4. Estructura del repositorio y separación de responsabilidades
 
-**Nota importante (v2.2):** Lumi tiene dos repositorios separados:
+**Nota importante (v2.3):** Lumi tiene dos repositorios separados:
 
 1. **`lumi-vps`** (este repo) — Backend que corre en el VPS Contabo. Contiene el agente, la API, el bridge server, Mem0 y las políticas de personalidad. Es lo que se describe en esta sección.
 2. **Fork de OLV** (repo separado) — Código local en Windows. Contiene `LumiAgent(AgentInterface)`, wake word detector, bridge client, interrupt handler, y la capa sensorial/visual. No se describe aquí.
@@ -376,66 +407,99 @@ El regex + Semantic Router captura ~80-90% de los casos. El LLM maneja los casos
 El código en `lumi-vps` NO es un fork de OLV — es una app FastAPI independiente.
 
 ```
-lumi-vps/                            ← Backend VPS (ESTE repo)
-├── src/                             ← App principal FastAPI "LUMI VPS" (v0.4.0)
-│   ├── main.py                      ← Entrypoint: root_path="/lumi"
-│   ├── agent/
-│   │   ├── loop.py                  ← Orquestador: classify→context→LLM→tools→memory
-│   │   ├── llm.py                   ← Factory con fallback de 3 modelos
-│   │   ├── context.py               ← System prompt: cached prefix + dynamic suffix
-│   │   ├── memory.py                ← Fachada → mem0_client.py
-│   │   ├── router.py                ← Clasificador pre-LLM (keywords)
-│   │   ├── tools.py                 ← ToolRegistry: local (VPS) + remote (bridge)
-│   │   └── async_tasks.py           ← Placeholder vacío (Fase 5+)
-│   ├── llm/                         ← Wrappers individuales por modelo
-│   │   ├── base.py                  ← BaseLLM (abstracta)
-│   │   ├── deepinfra.py             ← Cliente unificado DeepInfra con fallback
-│   │   ├── qwen3_5_35b.py           ← Qwen3.5-35B-A3B (primario)
-│   │   ├── step_3_5_flash.py        ← Step-3.5-Flash (fallback 1)
-│   │   └── nemotron_super_120b.py   ← Nemotron-120B (fallback 2)
-│   ├── bridge/
-│   │   └── bridge_server.py         ← WebSocket server MCP Bridge VPS↔PC
+lumi-vps/                              ← Backend VPS (ESTE repo)
+├── agent/                             ← App principal FastAPI "LUMI VPS" (v0.4.0)
+│   ├── presence/
+│   │   ├── app.py                     ← FastAPI entrypoint (root_path="/lumi")
+│   │   └── conduits/
+│   │       ├── group_policy.py        ← Group channel behavior rules
+│   │       └── whatsapp_adapter.py    ← WhatsApp placeholder adapter
+│   ├── cognition/
+│   │   ├── stream.py                  ← Orquestador central: cycle() / run_stream()
+│   │   ├── attention.py               ← Keyword classifier (chat|web_search|long_task|explicit_save)
+│   │   ├── stimulus.py                ← Handlers: long_task + explicit_save
+│   │   ├── intention.py               ← Tool check (1/turn) + tool registration
+│   │   └── working_memory.py          ← System prompt: cached prefix + dynamic suffix
+│   ├── expression/
+│   │   ├── synapses.py                ← LLM factory: 2 model groups + exponential backoff
+│   │   └── providers/                 ← One class per model (BaseLLM ABC)
+│   │       ├── base.py                ← Abstract BaseLLM
+│   │       ├── qwen3_5_35b.py         ← Qwen3.5-35B-A3B (MAIN #2)
+│   │       ├── step_3_5_flash.py      ← Step-3.5-Flash (MAIN #3)
+│   │       ├── nemotron_super_120b.py ← Nemotron-120B (MAIN #5)
+│   │       ├── qwen3_235b_a22b.py     ← Qwen3-235B-A22B (MAIN #4)
+│   │       ├── gemma_4_26b_a4b.py     ← Gemma4 26B (MAIN #1, primario)
+│   │       ├── mistral.py             ← Mistral Small 24B (LIGHTWEIGHT #1)
+│   │       ├── deepseek.py            ← DeepSeek V4 Flash (LIGHTWEIGHT #2)
+│   │       └── qwen_9b.py             ← Qwen3.5-9B (LIGHTWEIGHT #3)
+│   ├── faculties/                     ← Tool implementations
+│   │   ├── base.py                    ← BaseTool ABC
+│   │   ├── brave_search.py            ← Brave Search API tool
+│   │   ├── registry.py                ← ToolRegistry (local + remote)
+│   │   └── dispatcher.py              ← Tool execution dispatch
+│   ├── affect/
+│   │   ├── __init__.py                ← Public API exports
+│   │   ├── mood.py                    ← Mood CRUD: state, deltas, morning_reset, sleep_stages, honesty_mode
+│   │   └── evaluation.py              ← idle_decay() + LLM contextual mood evaluation
 │   ├── memory/
-│   │   ├── mem0_client.py           ← Cliente HTTP Mem0 + SQLite historial
-│   │   └── sqlite_memory.py         ← Legado (reemplazado por mem0_client)
-│   ├── state/
-│   │   └── internal_state.py        ← Estado interno: mood, energy, focus (SQLite)
-│   ├── tools/
-│   │   ├── base.py                  ← BaseTool (abstracta)
-│   │   └── brave_search.py          ← Brave Search API tool
-│   ├── personality/
-│   │   ├── lumi_card.json           ← Character Card V3 (SillyTavern)
-│   │   ├── few_shot_examples.json   ← (vacío — pendiente)
-│   │   └── emotional_rubric.md      ← (vacío — pendiente)
-│   └── skills/                      ← Docs de política (read-only, no ejecutables)
-│       ├── memory_search.md         ← Cuándo/cómo buscar en memoria
-│       ├── memory_policy.md         ← Qué guardar en Mem0 por nivel de interés
-│       ├── attitude_policy.md       ← Cómo usa Lumi la memoria en conversación
-│       ├── interest_policy.md       ← Evolución de interest_scores
-│       ├── mood_policy.md           ← Dinámica del estado interno
-│       ├── reflection_policy.md     ← Pipeline de cierre de sesión (11 etapas)
-│       ├── relation_policy.md       ← Almacenamiento de relaciones con terceros
-│       ├── skill_evolution.md       ← Propuestas de nuevas skills por Lumi
-│       └── _impl/                   ← Schemas SQL y helpers
-│           ├── 00_schema_sqlite.sql ← Schema SQLite (persons, relations, lumi_state, skill_proposals)
-│           ├── mood_helpers.py      ← Traducción de estado y reset matutino
-│           ├── interest_decay.sql   ← Decaimiento de interés semanal
-│           ├── weekly_decay.sql     ← Reglas de decaimiento
-│           └── skill_evo.sql        ← Template de inserción de skill proposals
-├── mem0_server/                     ← Servicio Mem0 REST API (Dockerizado)
-│   ├── main.py                      ← FastAPI en container:8000 → host:8100
-│   └── requirements.txt             ← Dependencias Python del servidor Mem0
-├── mem0_history/                    ← Historial operacional de Mem0 (gitignored)
-│   └── history.db
+│   │   ├── __init__.py                ← Public API (single import point for all memory)
+│   │   ├── episodic.py                ← traces.db: history, mood_logs, diary entries
+│   │   ├── semantic.py                ← Mem0 REST client (add, search, search_person, save_explicit)
+│   │   └── mindstream/
+│   │       ├── social.py              ← known_persons CRUD, relations, aliases, resolve, deltas, decay
+│   │       ├── mentions.py            ← person_mentions table (per-turn entity tracking)
+│   │       ├── consolidation.py       ← LLM-powered: entity consolidation, interest deltas, diary
+│   │       └── cleanup.py             ← Periodic DB pruning (history, mood_logs, heartbeat_runs)
+│   ├── rhythm/
+│   │   ├── heartbeat.py               ← APScheduler job registration + start
+│   │   ├── cadence.py                 ← Timing constants (15min, 7am, 3am, Mon 4am)
+│   │   ├── state.py                   ← Execution tracker (heartbeat_state / heartbeat_runs)
+│   │   └── routines/
+│   │       ├── pulse.py               ← 15min tick: mood check + idle decay
+│   │       ├── morning.py             ← 7am daily: morning mood regression
+│   │       ├── quiescence.py          ← 3am nightly: 8-step orchestration (2 wired, 6 stubs)
+│   │       └── forgetting.py          ← Mon 4am: cleanup wired, interest_decay stub
+│   ├── subconscious/                  ← Singleton database access layer
+│   │   ├── __init__.py                ← traces + core singletons + init_databases()
+│   │   ├── repositories/
+│   │   │   ├── __init__.py
+│   │   │   ├── traces.py              ← TracesRepository (data/traces.db)
+│   │   │   └── core.py                ← CoreRepository (data/core.db)
+│   │   ├── migrations/                ← Idempotent SQL schema files
+│   │   └── seeds/                     ← Initial seed data
+│   ├── perception/
+│   │   └── websocket.py               ← MCP Bridge WebSocket server (VPS↔PC)
+│   ├── identity/
+│   │   ├── lumi_soul.md               ← Core personality (identity, voice, emotional architecture, moral compass)
+│   │   ├── attitude.md                ← Expressive framework (emotion tags, mood-to-attitude mapping)
+│   │   ├── compact_soul.md            ← Compact version of lumi_soul for token-constrained contexts
+│   │   └── principles/                ← Behavioral rule docs (read-only policy)
+│   │       ├── interest_policy.md     ← How interest_score evolves per person (nightly batch)
+│   │       ├── memory_policy.md       ← What semantic data to store in Mem0 by interest level
+│   │       ├── memory_search.md       ← 5-step memory search pipeline
+│   │       ├── mood_policy.md         ← Internal mood state fields, baselines, deltas, drift
+│   │       ├── reflection_policy.md   ← 11-stage session close pipeline
+│   │       ├── relation_policy.md     ← Third-party relation storage and inference
+│   │       └── skill_evolution.md     ← Automated skill proposal system (disabled first 90 days)
+│   └── substrate/
+│       ├── __init__.py
+│       ├── logger.py                  ← Shared logger with COL (UTC-5) timestamps
+│       └── nightly_log.py             ← Structured logging for nightly maintenance runs
+├── mem0_server/                       ← Servicio Mem0 REST API (Dockerizado)
+│   ├── main.py                        ← FastAPI en container:8000 → host:8100
+│   └── requirements.txt
+├── data/                              ← SQLite databases (runtime, gitignored)
+│   ├── traces.db                      ← Conversation history, sessions, diary, heartbeat_runs
+│   └── core.db                        ← Lumi state, known_persons, relations, skill_proposals, heartbeat_state
 ├── caddy/
-│   └── Caddyfile                    ← Reverse proxy: api.drykolf.xyz/lumi/* → :8000
-├── docker-compose.yml               ← Servicios: postgres + mem0 + neo4j (opcional)
-├── Dockerfile.mem0                  ← Imagen Docker del servidor Mem0
-├── pyproject.toml                   ← Manifiesto Python (uv)
-├── uv.lock                          ← Lockfile de dependencias
-├── .env.example                     ← Template de variables de entorno
+│   └── Caddyfile                      ← Reverse proxy: api.drykolf.xyz/lumi/* → :8000
+├── docker-compose.yml                 ← Servicios: postgres + mem0 + neo4j (opcional)
+├── Dockerfile.mem0                    ← Imagen Docker del servidor Mem0
+├── pyproject.toml                     ← Manifiesto Python (uv)
+├── uv.lock                            ← Lockfile de dependencias
+├── .env.example                       ← Template de variables de entorno
 ├── .gitignore
-└── .venv/                           ← Virtual environment (uv)
+└── .venv/                             ← Virtual environment (uv)
 ```
 
 ### 4.1 Componentes planificados para fases futuras
@@ -443,62 +507,79 @@ lumi-vps/                            ← Backend VPS (ESTE repo)
 Los siguientes módulos están diseñados en el manual pero **no implementados aún** en el código:
 
 | Módulo | Fase prevista | Estado |
-|---|---|---|
-| `agent/filter.py` | Fase 6 | No implementado |
-| `agent/curiosity_engine.py` | Fase 5+ | No implementado |
-| `agent/followup_queue.py` | Fase 5-6 | No implementado |
-| `agent/capabilities.py` | Fase 2+ | No implementado |
-| `agent/async_tasks.py` (real) | Fase 4+ | Placeholder vacío |
-| `state/interruption_tracker.py` | Fase 5-6 | No implementado |
+|---|---|---|---|
 | `channels/` (adapters) | Fase 6 | No implementado |
-| `heartbeat/scheduler.py` | Fase 6 | No implementado |
 | `mcp_servers/calendar/` | Fase 5-6 | No implementado |
-| `mcp_servers/time/` | Fase 3 | No implementado (hora inyectada en dynamic suffix) |
+| `agent/presence/conduits/discord_adapter.py` | Fase 6 | No implementado |
+| `agent/faculties/clipboard_tool.py` | Fase 4+ | Schema registrado como remote, implementación local pendiente |
+| Quiescencia steps 3-5, 7-8 | Fase 4 (Block 5) | Stubs (`...`) en `agent/rhythm/routines/quiescence.py` |
+| Weekly interest decay | Fase 4 (Block 5) | Stub (`...`) en `agent/rhythm/routines/forgetting.py` |
+| Mem0 fact extraction per turn | Fase 4 | `add_memory()` existe pero no se llama desde el agent loop |
 
 ### 4.2 Filosofía del código
 
 El servidor VPS sigue el principio de agente ultra-ligero. Cada archivo tiene una sola responsabilidad.
 
-**Estructura del loop principal** (implementado en `src/agent/loop.py`):
+**Estructura del loop principal** (implementado en `agent/cognition/stream.py`):
 
 - Dos entrypoints: `run()` (retorna string) y `run_stream()` (async generator, usado por `/v1/chat`)
-- Clasificación pre-LLM con `router.classify()`: detecta `long_task`, `explicit_save`, `web_search`, `chat`
-- Loop de tool calling: máximo 10 iteraciones. `run_stream()` hace tool calls sin streaming, luego streamea la respuesta final.
-- `run()` tiene soporte para `[ESCALAR]` y `[SEGUIMIENTO:]` como placeholders (detecta los tags pero no ejecuta la lógica real aún).
+- Clasificación pre-LLM con `attention.classify()`: detecta `long_task`, `explicit_save`, `web_search`, `chat`
+- **Exactamente 1 tool call por turno** — `intention.decide_tool()` ejecuta un check ligero antes del LLM principal. NO es iterativo.
+- `_entities_check()` — LLM ligero detecta menciones de terceros en cada turno
+- `_resolve_entities()` — resuelve contra known_persons + busca en Mem0 scoped
+- `build_messages()` — construye el prompt con cached prefix + dynamic suffix
+- `_finalize_turn()` — guarda turnos + persiste menciones con estado de resolución
 
-**Loop canónico** (simplificado de `src/agent/loop.py`):
+**Loop canónico** (simplificado de `agent/cognition/stream.py`):
 
 ```python
-async def agent_loop(user_input, user_id, max_iterations=10):
-    task_type = router.classify(user_input)
+async def cycle(user_id, message, metadata):
+    # Sleep check
+    if get_sleep_stage(...) == "sleeping":
+        yield "[tired] Zzz..."
+        return
+
+    task_type = attention.classify(message)
+    
     if task_type == "long_task":
-        return "[thinking] Dame un momento..."  # async real en Fase 5+
+        reply = await handle_long_task(user_id, message, sid)
+        _finalize_turn(user_id, message, reply, sid)
+        yield reply; return
+
     if task_type == "explicit_save":
-        await add_memory_explicit(user_input, user_id)
-        return "[neutral] Listo, lo guardé."
+        reply = await handle_explicit_save(user_id, message, sid, metadata)
+        _finalize_turn(user_id, message, reply, sid)
+        yield reply; return
 
-    context = await build_messages(user_id, user_input, metadata)
+    # Entity detection + resolution (1 turn = 1 LLM check)
+    entities = await _entities_check(message, sid, user_id)
+    entities_context = await _resolve_entities(entities, user_id, message)
+    
+    # Build context: cached prefix + dynamic suffix + history
+    messages = await build_messages(user_id, message, metadata,
+                                     entities_context=entities_context)
 
-    for i in range(max_iterations):
-        response = await llm.chat(context, tool_schemas=schemas)
-        if tools.has_tool_calls(response):
-            results = await tools.execute(response.tool_calls, user_id)
-            context.append_tool_results(results)
-            continue
-        break
+    # Single tool check (NOT iterative)
+    tool, args = await intention.decide_tool(sid, message, user_id=user_id)
+    if tool and args is not None:
+        # Execute tool + append results to messages
+        tool_results = await intention.execute([...], user_id)
+        messages.append(...)
 
+    # Stream final response
     full_reply = ""
-    async for chunk in llm.chat_stream(context):
+    async for chunk in chat_stream(messages, ...):
         full_reply += chunk
         yield chunk
 
-    save_turn(user_id, "user", user_input)
-    save_turn(user_id, "assistant", full_reply)
+    # Finalize: save turns + persist resolved mentions
+    _finalize_turn(user_id, message, full_reply, sid,
+                    entities=entities, entities_context=entities_context)
 ```
 
 ### 4.3 Selección de modelo y fallback
 
-La fábrica en `src/agent/llm.py` mantiene un registro de modelos en orden de prioridad. Cada modelo se prueba hasta 2 veces con exponential backoff. Si un modelo falla por rate limit, se pasa al siguiente. Ver sección 3.1 para los detalles de `extra_body` por modelo.
+La fábrica en `agent/expression/synapses.py` mantiene dos grupos de modelos (`ModelGroup.MAIN` con 5 modelos, `ModelGroup.LIGHTWEIGHT` con 3 modelos). Cada modelo se prueba hasta 2 veces con exponential backoff. Si un modelo falla por rate limit, se pasa al siguiente. Ver sección 3.1 para los detalles de `extra_body` por modelo.
 
 ### 4.4 Stack técnico del VPS
 
@@ -617,14 +698,14 @@ El brief asume `user_id` confiable en cada request, pero para canal voz no hay f
 
 La versión anterior de este manual separaba el card de personalidad en dos archivos: `lumi_card_runtime.json` (ligero, viajaba en cada request) y `lumi_card_reference.json` (completo, vivía en disco). La razón era ahorrar costos en DeepInfra, que no tenía prompt caching.
 
-**Esto ya no es necesario.** DeepInfra activó prompt caching nativo para los modelos Qwen. La consecuencia directa:
+**Esto ya no es necesario.** DeepInfra activó prompt caching nativo. La consecuencia directa:
 
-- El card completo (identidad + ejemplos + reglas) viaja en cada request
+- La personalidad completa (lumi_soul.md + attitude.md) viaja en cada request
 - Pero cachea automáticamente, pagando ~10% del costo original
 - No hay que "recortar" la personalidad para ahorrar plata
-- Lumi es más consistente porque el modelo ve el card entero cada turno
+- Lumi es más consistente porque el modelo ve la personalidad entera cada turno
 
-**Archivo único:** `custom/personality/lumi_card.json` — Character Card V3 completo, basado en `Lumi.md` + `Lumi_implementation.md`. No hay separación.
+**Archivos fuente (v2.3):** `agent/identity/lumi_soul.md` (personalidad central: identidad, voz, arquitectura emocional, brújula moral) + `agent/identity/attitude.md` (marco expresivo: emotion tags, mapeo mood→actitud). Son archivos markdown que se concatenan y cachean como system prompt prefix. No hay JSON ni Character Card V3 — el formato es markdown directo.
 
 ### 6.2 Estructura del system prompt por capas
 
@@ -632,62 +713,66 @@ El prompt debe estructurarse en dos bloques estrictamente separados para maximiz
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║ BLOQUE CACHED (estable, ~2,500 tokens)                       ║
+║ BLOQUE CACHED (estable, ~2,200-2,700 tokens)                 ║
 ║                                                              ║
-║ [1] lumi_card.json completo                                  ║
+║ [1] agent/identity/lumi_soul.md (cargado una vez, ~118 líneas) ║
 ║     - Identity & alignment (Guardian Mind, INTJ)             ║
-║     - Core traits, motivations, fears                        ║
-║     - Interpersonal style (Two-Tiered Protocol)              ║
-║     - Voice & register (colombiano neutro, sin modismos)     ║
-║     - Likes, dislikes, boundaries                            ║
-║     - Anti-sycophancy, Stoic Delay                           ║
+║     - Ámbito principal (arquitectura de vida, criterio)      ║
+║     - Perfil psicológico Big Five                            ║
+║     - Arquetipo, motivaciones, miedo real                    ║
+║     - Brújula moral                                          ║
+║     - Carácter relacional (Jose / terceros) — jerárquico     ║
+║     - Espectro emocional                                     ║
 ║                                                              ║
-║ [2] Implementation rules (embebidas en el card)              ║
-║     - Emotion tags obligatorios                              ║
+║ [2] agent/identity/attitude.md (cargado una vez, ~284 líneas) ║
+║     - Emotion tags obligatorios + lista estática             ║
 ║     - Inner thoughts format                                  ║
-║     - Deflection patterns                                    ║
-║     - Response length by context                             ║
-║                                                              ║
-║ [3] Few-shot examples (embebidos en el card)                 ║
+║     - Voz y lenguaje (español colombiano, longitud)          ║
+║     - Jerarquía relacional operativa (con tabla de scores)   ║
+║     - Conversaciones grupales (WhatsApp, Discord)            ║
+║     - Tag [ignore]                                           ║
+║     - Mapeo mood → attitude y contexto → emoción activa      ║
+║     - Ejemplos por escenario (Jose 1:1, tercero, grupo)      ║
 ╚══════════════════════════════════════════════════════════════╝
 ╔══════════════════════════════════════════════════════════════╗
-║ BLOQUE DYNAMIC (cambia cada request, ~300-500 tokens)        ║
+║ BLOQUE DYNAMIC (cambia cada request, ~800-1200 tokens)       ║
 ║                                                              ║
-║ [4] lumi_internal_state traducido a texto                    ║
-║     "Estado actual: neutral, energía normal, enfoque avail." ║
-║                                                              ║
-║ [5] Memorias relevantes (Mem0 semantic search)               ║
-║                                                              ║
-║ [6] Perfil de usuario (Mem0, placeholder en Fase 4)          ║
-║                                                              ║
-║ [7] Contexto: canal, sesión, hora local                      ║
-║                                                              ║
-║ [8] Historial reciente de conversación (SQLite, últimos 10)  ║
-║                                                              ║
-║ [9] Mensaje actual del usuario                               ║
-║                                                              ║
-║ [10] Observaciones pasivas (audio + pantalla) ← Fase 5+      ║
-║ [11] Capabilities activas (canales, tools) ← Fase 5+         ║
+║ [3] Ubicación (fija)                                         ║
+║ [4] Sleep stage (estable por horas) — drowsy / sleepy        ║
+║ [5] Diary entries recientes (estable por día, 3am)           ║
+║ [6] Estado interno (actualizado cada ~15min)                  ║
+║     - mood_valence, mood_energy, irritation, focus_level     ║
+║     - state_label, state_sentence                            ║
+║     - emotional_honesty_mode (si activo)                     ║
+║ [7] Perfil del hablante (estable por usuario)                 ║
+║ [8] Personas mencionadas + relaciones (por turno)             ║
+║ [9] Memoria relevante: Mem0 + scoped por persona (por turno) ║
+║ [10] Contexto: canal, sesión, hora (por turno)               ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
-**Regla crítica:** cualquier cambio en el bloque cached — incluso una coma — invalida el cache y la siguiente request paga precio completo. El `context.py` debe garantizar que el bloque 1-3 sea **byte-idéntico** entre sesiones mientras no cambie el card.
+**Regla crítica:** cualquier cambio en el bloque cached — incluso una coma — invalida el cache y la siguiente request paga precio completo. `working_memory.py` debe garantizar que el bloque [1]-[2] sea **byte-idéntico** entre sesiones mientras no cambien los archivos fuente.
 
 ### 6.3 Construcción del prompt (implementado)
 
 ```python
-# src/agent/context.py — implementación real
+# agent/cognition/working_memory.py — implementación real
 
-CARD_PATH = Path(__file__).parent.parent / "personality" / "lumi_card.json"
+SOUL_PATH   = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
+ATTITUDE_PATH = Path(__file__).parent.parent / "identity" / "attitude.md"
 
 _cached_prefix = None  # Se construye una vez al importar
 
 def _build_cached_prefix() -> str:
-    """Carga el card y lo renderiza. Se llama UNA sola vez."""
-    if not CARD_PATH.exists():
-        return "Eres Lumi, asistente personal de Jose Barco..."
-    card = json.loads(CARD_PATH.read_text(encoding="utf-8"))
-    return _render_card(card)
+    """Carga los dos archivos markdown y los cachea. Se llama UNA sola vez."""
+    parts = []
+    if SOUL_PATH.exists():
+        parts.append(SOUL_PATH.read_text(encoding="utf-8"))
+    if ATTITUDE_PATH.exists():
+        parts.append(ATTITUDE_PATH.read_text(encoding="utf-8"))
+    if parts:
+        return "\n\n---\n\n".join(parts)
+    return "Eres Lumi, asistente personal de Jose Barco..."  # Fallback hardcoded
 
 def get_cached_prefix() -> str:
     """Retorna el prefix cacheado. Lo construye en el primer llamado."""
@@ -696,48 +781,92 @@ def get_cached_prefix() -> str:
         _cached_prefix = _build_cached_prefix()
     return _cached_prefix
 
-async def _build_dynamic_suffix(user_id: str, message: str, metadata: dict) -> str:
-    """Construye la sección variable: estado + memorias + perfil + contexto + hora."""
-    state = get_state(user_id)
-    relevant_memories = await search_relevant(user_id, message)
-    profile = await get_profile(user_id)  # placeholder en Fase 4
-    now = datetime.now(COL).strftime("%d/%m/%Y %H:%M COT")
-
-    parts = ["[Estado interno] " + state_to_text(state)]
-    if relevant_memories:
-        parts.append("[Memorias relevantes]\n" + "\n".join("- " + m for m in relevant_memories))
-    # ... perfil, canal, sesión, hora
-
+async def _build_dynamic_suffix(user_id, message, metadata, entities_context) -> str:
+    """Construye la sección variable en orden: estático → estable-horas → 
+    estable-día → cada-15min → por-turno."""
+    state = get_state()
+    now_str = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
+    
+    parts = []
+    
+    # 1. Ubicación (fija)
+    parts.append("[Ubicacion] ...")
+    
+    # 2. Sleep stage (estable por horas)
+    stage = get_sleep_stage(tz)
+    if stage == "drowsy":   parts.append("[Modo descanso] ...")
+    elif stage == "sleepy": parts.append("[Modo descanso] ...")
+    
+    # 3. Diary entries (estable por día)
+    diary_block = await _build_diary_suffix(user_id)
+    if diary_block: parts.append(diary_block)
+    
+    # 4. Estado interno (~15min)
+    parts.append("[Estado interno] " + state_to_text(state))
+    if state.get("emotional_honesty_mode"):
+        parts.append("[Modo honestidad emocional] ...")
+    
+    # 5. Perfil del hablante
+    speaker_parts, display = _format_speaker_block(user_id)
+    parts.extend(speaker_parts)
+    
+    # 6. Entidades del turno
+    entity_sections, scoped_memories = _format_entity_sections(
+        entities_context, user_id, display
+    )
+    parts.extend(entity_sections)
+    
+    # 7. Memoria relevante (deduplicada)
+    relevant = await search_relevant(user_id, message)
+    all_memories = merge(relevant, scoped_memories)
+    deduped = _dedup_memories(all_memories, recent_turns)
+    if deduped:
+        parts.append("[Memoria relevante]\n" + "\n".join("- " + m for m in deduped))
+    
+    # 8. Contexto (más volátil — va al final)
+    parts.append(f"[Contexto] Canal: {channel} | Sesion: {sid} | Hora: {now_str}")
+    
     return "\n\n".join(parts)
 
-async def build_messages(user_id: str, message: str, metadata: dict) -> list[dict]:
+async def build_messages(user_id, message, metadata, entities_context=None):
     cached = get_cached_prefix()
-    dynamic = await _build_dynamic_suffix(user_id, message, metadata)
+    dynamic = await _build_dynamic_suffix(user_id, message, metadata, entities_context)
     system_prompt = cached + "\n\n---\n\n" + dynamic
-
-    history = get_history(user_id, limit=10)
+    
+    sid = metadata.get("session_id", "default")
+    since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+    
+    session_turns = get_recent_session_log(sid, since_ts=since, limit=100)
+    cross_turns = get_recent_user_log(user_id, since_ts=since, ...)
+    
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
-    messages.append({"role": "user", "content": message})
+    if cross_turns:
+        messages.append({"role": "user", 
+                         "content": "[Conversaciones anteriores]\n\n" + 
+                                    format_turns_grouped(cross_turns, ...)})
+    messages.extend(_turns_to_messages(session_turns))
+    messages.append({"role": "user", "content": f"{user_id}: {message}"})
     return messages
 ```
 
 ### 6.4 Resultado actual
 
-- **System prompt por request:** ~3,000 tokens (~2,500 cached + ~500 dynamic)
+- **System prompt por request:** ~3,200-3,700 tokens (~2,200-2,700 cached + ~1,000 dynamic)
 - **Costo con caching:** la primera request del período paga costo completo, el resto ~10%
-- **Personalidad consistente:** el modelo ve el card completo siempre
-- **Tool definitions:** se pasan como parámetro `tools` en la llamada a la API, NO en el system prompt. Se registran dinámicamente según qué bridge connections están activas.
-- **Passive observations y capabilities:** planificados para Fase 5+, no presentes en el dynamic suffix actual
+- **Personalidad consistente:** el modelo ve lumi_soul.md + attitude.md completos siempre
+- **Tool definitions:** se pasan como parámetro `tools` en la llamada a la API, NO en el system prompt. Se registran dinámicamente en `intention.py`.
+- **Entity injection:** las personas mencionadas se resuelven en tiempo real y se inyectan con score, tone, relaciones y memorias scoped.
+- **Diary**: los entries generados por el consolidator nocturno se inyectan en el dynamic suffix.
 
 ### 6.5 Roadmap de personalidad
 
 | Fase | Estrategia |
 |---|---|
-| MVP/Fase 3 | Card completo cacheado en módulo (`get_cached_prefix()` en `src/agent/context.py`) |
-| Fase 3-4 | Estado interno dinámico en el suffix (3 campos: mood, energy, focus) |
-| Fase 4 (pendiente) | Perfil viviente estructurado en el suffix |
-| Fase 5+ | Rúbrica emocional, few-shot examples curados, passive observations |
+| MVP/Fase 3 | Markdown files cacheados en módulo (`get_cached_prefix()` en `agent/cognition/working_memory.py`) |
+| Fase 3-4 | Estado interno dinámico con 5 campos numéricos + sleep stages + emotional honesty mode |
+| Fase 4 (implementado) | Perfil viviente read-path: entity resolution + scoped Mem0 + injection |
+| Fase 4 (pendiente) | Perfil viviente write-path: update_profiles + update_relations nocturnos |
+| Fase 5+ | Rúbrica emocional, few-shot examples, passive observations |
 | Fase 10 | **LoRA fine-tuning** con conversaciones reales |
 
 ### 6.6 Consideraciones sobre LoRA fine-tuning (fase 10)
@@ -799,21 +928,21 @@ Ambos se exponen al LLM vía **tool calling**, pero viven en lugares distintos. 
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                       DeepInfra Qwen3.5                         │
-│                          (cerebro)                              │
+│                       DeepInfra (cerebro)                       │
+│             5 modelos MAIN + 3 LIGHTWEIGHT                      │
 └─────────┬───────────────────────────────────────────────────────┘
           │ tool_call("get_today_events")
           │ tool_call("query_screen_history")
           ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  VPS Contabo — agent/tools.py                                   │
+│  VPS Contabo — agent/cognition/intention.py                     │
 │                                                                 │
-│  ToolRegistry.execute(tool_call):                               │
+│  decide_tool() → ToolRegistry:                                  │
 │    ├── ¿Es un tool LOCAL VPS?                                   │
 │    │    └── brave_search, calendar, time, email → ejecuta aquí  │
 │    │                                                            │
 │    └── ¿Es un tool REMOTO (vive en el PC de Jose)?              │
-│         └── Envía al bridge_server.py vía WSS                   │
+│         └── Envía a perception/websocket.py vía WSS             │
 └─────────┬───────────────────────────────────────────────────────┘
           │                                    ▲
           │ WSS /v1/bridge                     │

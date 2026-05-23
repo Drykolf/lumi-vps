@@ -164,7 +164,7 @@ async def whatsapp_webhook(request: Request):
     if not is_authorized(payload):
         logger.warning("[whatsapp-webhook] invalid apikey")
         raise HTTPException(status_code=401, detail="Unauthorized")
-    logger.info("[whatsapp-webhook] received payload: %s", json.dumps(payload))
+    #logger.info("[whatsapp-webhook] received payload: %s", json.dumps(payload))
     parsed = parse_inbound(payload)
     if isinstance(parsed, Skip):
         return {"status": "ignored", "reason": parsed.reason}

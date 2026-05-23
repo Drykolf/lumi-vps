@@ -40,8 +40,9 @@ Reglas:
 - Si hay descriptor relacional, inclúyelo: "mamá", "prima", "jefe", "amiga", "de la oficina", etc.
 - Si la referencia es posesiva, usa anchor="user".
 - En el campo anchor, usa el user_id del hablante (el valor antes de ":" en cada linea del transcript) que menciono a la persona. Si la mencion no tiene hablante claro, usa null.
+- Los prefijos de formato "user_id:" al inicio de cada línea del transcript son etiquetas del hablante, no menciones de personas. No los extraigas como menciones.
 - Excluye al asistente.
-- Excluye al usuario salvo que el usuario se mencione explícitamente por nombre en tercera persona.
+- Excluye a los hablantes del transcript (cualquier user_id que aparezca como prefijo de línea) salvo que ese mismo nombre aparezca DENTRO del contenido de un mensaje refiriéndose a esa persona en tercera persona.
 - Si no hay personas explícitas ni referencias relacionales humanas, devuelve [].
 -Excluye referencias a entidades no humanas como empresas, juegos, apps, productos, eventos, etc.
 -Excluye referencias vagas como "alguien", "un amigo", "una persona", etc. salvo que tengan un descriptor claro como "un amigo de la universidad", "alguien de la oficina", etc.

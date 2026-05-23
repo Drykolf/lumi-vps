@@ -1,6 +1,6 @@
 # LUMI VPS — Phase 4 Unified Plan
 
-**Last updated:** May 21, 2026 (Block 2 redesigned to nightly + Block 5 partial wire)
+**Last updated:** May 23, 2026 (Block 2 redesigned to nightly + Block 5 partial wire; providers updated to 8)
 **Source:** Merged from 3 sources:
 - `.architecture/plan.md` (original Phase 4 plan)
 - `.architecture/phase4_known_persons_read_path_plan.md` (Phase 4A — schema migration + social read-path)
@@ -42,7 +42,7 @@ agent/
 │   └── intention.py              → tool detection + registration
 ├── expression/
 │   ├── synapses.py               → LLM factory (2 model groups, exponential backoff)
-│   └── providers/                → 6 model providers (Qwen, Step, Nemotron, Mistral, DeepSeek, Qwen9B)
+│   └── providers/                → 8 model providers (Gemma4, Qwen3.5-35B, Step, Qwen3-235B, Nemotron, Mistral, DeepSeek, Qwen9B)
 ├── memory/
 │   ├── __init__.py               → Public API (single import point)
 │   ├── semantic.py               → Mem0 REST client (add, search, search_person, save_explicit)
