@@ -12,6 +12,12 @@ logger = get_logger("presence.whatsapp")
 
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://localhost:8080")
 
+
+def _lumi_jids() -> list[str]:
+    """LUMI_WHATSAPP_JIDS = lista comma-separated (acepta @s.whatsapp.net y @lid)."""
+    raw = os.getenv("LUMI_WHATSAPP_JIDS", "")
+    return [j.strip() for j in raw.split(",") if j.strip()]
+
 _EMOTION_TAG = re.compile(r"\[[^\]]*\]")
 _INNER_THOUGHT = re.compile(r"\{[^}]*\}")
 
@@ -83,15 +89,63 @@ def extract_text(data: dict) -> str | None:
     )
 
 
-def extract_reply_and_mentions(data: dict) -> tuple[str | None, list[str]]:
-    """Extrae (reply_to_msg_id, mentioned_jids) de extendedTextMessage.contextInfo."""
+def _resolve_context_info(data: dict) -> dict:
+    """Devuelve el contextInfo correcto. Evolution lo eleva a data.contextInfo,
+    pero otros entornos Baileys lo dejan dentro de message.*. Precedencia:
+      1. data.contextInfo                                   (Evolution actual)
+      2. message.extendedTextMessage.contextInfo            (Baileys clásico)
+      3. message.contextInfo                                (fallback)
+    """
+    if (ctx := data.get("contextInfo")):
+        return ctx
     msg = data.get("message") or {}
-    ctx = (msg.get("extendedTextMessage") or {}).get("contextInfo") or {}
+    if (ctx := (msg.get("extendedTextMessage") or {}).get("contextInfo")):
+        return ctx
+    return msg.get("contextInfo") or {}
+
+
+def extract_reply_and_mentions(data: dict) -> tuple[str | None, list[str], str | None]:
+    """Extrae (reply_to_msg_id, mentioned_jids, replied_to_participant) del contextInfo.
+
+    `replied_to_participant` es el autor del mensaje citado (en replies); útil
+    para detectar replies a Lumi sin depender del cache de msg_ids enviados.
+    """
+    ctx = _resolve_context_info(data)
     reply_to = ctx.get("stanzaId")
     mentions = ctx.get("mentionedJid") or []
     if not isinstance(mentions, list):
         mentions = []
-    return reply_to, mentions
+    replied_to_participant = ctx.get("participant")
+    return reply_to, mentions, replied_to_participant
+
+
+def extract_quoted_text(data: dict) -> str | None:
+    """Texto del mensaje citado en un reply (None si no hay reply o no es texto)."""
+    ctx = _resolve_context_info(data)
+    quoted = ctx.get("quotedMessage") or {}
+    return (
+        quoted.get("conversation")
+        or (quoted.get("extendedTextMessage") or {}).get("text")
+    )
+
+
+def _jid_local(jid: str) -> str:
+    """573155963781:83@s.whatsapp.net → 573155963781. Mismo helper que en group_policy."""
+    return jid.split("@", 1)[0].split(":", 1)[0] if jid else ""
+
+
+def replace_lumi_mentions(text: str, lumi_jids: list[str]) -> str:
+    """En WhatsApp el @mention en texto solo lleva el número (sin sufijo @lid ni
+    @s.whatsapp.net). Reemplaza '@<numero>' por '@lumi' para cualquier jid
+    configurado de Lumi."""
+    if not text or not lumi_jids:
+        return text
+    locals_ = [_jid_local(j) for j in lumi_jids if j]
+    locals_ = [l for l in locals_ if l]
+    if not locals_:
+        return text
+    pattern = re.compile(r"@(" + "|".join(re.escape(l) for l in locals_) + r")\b")
+    return pattern.sub("@lumi", text)
 
 
 def extract_sender_jid(data: dict, remote_jid: str) -> str | None:
@@ -135,6 +189,8 @@ class InboundMessage:
     msg_id: str | None = None
     reply_to_msg_id: str | None = None
     mentioned_jids: list[str] = field(default_factory=list)
+    replied_to_participant: str | None = None
+    quoted_text: str | None = None
     is_group: bool = False
     push_name: str | None = None
 
@@ -161,6 +217,8 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
     if not text:
         return Skip(f"non-text messageType={data.get('messageType')}")
 
+    text = replace_lumi_mentions(text, _lumi_jids())
+
     sender_jid = extract_sender_jid(data, remote_jid)
     if not sender_jid:
         return Skip("group message without participant")
@@ -176,7 +234,8 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
         )
         return Skip("unknown contact")
 
-    reply_to, mentions = extract_reply_and_mentions(data)
+    reply_to, mentions, replied_to_participant = extract_reply_and_mentions(data)
+    quoted_text = extract_quoted_text(data)
     return InboundMessage(
         person_id=row["person_id"],
         text=text,
@@ -186,6 +245,89 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
         msg_id=(data.get("key") or {}).get("id"),
         reply_to_msg_id=reply_to,
         mentioned_jids=mentions,
+        replied_to_participant=replied_to_participant,
+        quoted_text=quoted_text,
         is_group=remote_jid.endswith("@g.us"),
         push_name=data.get("pushName"),
     )
+
+
+# ── Orquestación: dispatch entre 1:1 y grupo ──────────────────────────────────
+
+from agent.cognition.stream import run
+from agent.memory import save_turn, get_recent_session_log
+from agent.presence.conduits import group_policy
+
+
+async def _handle_group(parsed: InboundMessage) -> dict:
+    decision = group_policy.classify_inbound(
+        parsed.remote_jid, parsed, lumi_jids=_lumi_jids()
+    )
+
+    if decision == "observe":
+        save_turn(
+            parsed.person_id, "user", parsed.text,
+            session_id=parsed.metadata["session_id"],
+        )
+        return {"status": "observed", "person_id": parsed.person_id}
+
+    if decision == "confirm_close":
+        recent = get_recent_session_log(parsed.metadata["session_id"], limit=4)
+        is_close, short_reply = await group_policy.confirm_closing(parsed.text, recent)
+        if is_close:
+            save_turn(
+                parsed.person_id, "user", parsed.text,
+                session_id=parsed.metadata["session_id"],
+            )
+            try:
+                sent_id = await send_text(
+                    parsed.instance, parsed.remote_jid, short_reply
+                )
+            except Exception as e:
+                logger.error(f"sendText (close) failed: {e}")
+                sent_id = None
+            save_turn(
+                parsed.person_id, "assistant", short_reply,
+                session_id=parsed.metadata["session_id"],
+            )
+            group_policy.close_window(parsed.remote_jid)
+            return {"status": "closed", "person_id": parsed.person_id, "msg_id": sent_id}
+        group_policy.reopen_window(parsed.remote_jid)
+        # fallthrough → engage_main
+
+    # engage_main (o reabierto tras KEEP)
+    parsed.metadata["channel_type"] = "group"
+    llm_text = parsed.text
+    if parsed.quoted_text:
+        llm_text = (
+            f"{parsed.text}\n"
+            f"(el usuario esta respondiendo directamente a un mensaje anterior: "
+            f"{parsed.quoted_text})"
+        )
+    reply = await run(parsed.person_id, llm_text, parsed.metadata)
+    try:
+        sent_id = await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"sendText failed: {e}")
+        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
+    group_policy.register_lumi_response(
+        parsed.remote_jid, sent_id, user_msg_text=parsed.text
+    )
+    return {"status": "ok", "person_id": parsed.person_id}
+
+
+async def _handle_direct(parsed: InboundMessage) -> dict:
+    parsed.metadata["channel_type"] = "direct"
+    reply = await run(parsed.person_id, parsed.text, parsed.metadata)
+    try:
+        await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"sendText failed: {e}")
+        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
+    return {"status": "ok", "person_id": parsed.person_id}
+
+
+async def handle_inbound(parsed: InboundMessage) -> dict:
+    if parsed.is_group:
+        return await _handle_group(parsed)
+    return await _handle_direct(parsed)

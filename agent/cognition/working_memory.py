@@ -363,12 +363,17 @@ def format_turns_grouped(
 
 
 def _turns_to_messages(turns: list[dict]) -> list[dict]:
-    """Convert session turns to OpenAI-format message dicts with speaker prefix in content."""
+    """Convert session turns to OpenAI-format message dicts.
+    User turns get speaker prefix (multiple users may share a session).
+    Assistant turns keep content as-is — role already identifies Lumi."""
     out = []
     for t in turns:
         role = t.get("role", "user")
-        speaker = "Lumi" if role == "assistant" else (t.get("user_id") or "user")
-        out.append({"role": role, "content": f"{speaker}: {t.get('content') or ''}"})
+        if role == "assistant":
+            out.append({"role": role, "content": t.get("content") or ""})
+        else:
+            speaker = t.get("user_id") or "user"
+            out.append({"role": role, "content": f"{speaker}: {t.get('content') or ''}"})
     return out
 
 

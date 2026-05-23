@@ -22,13 +22,6 @@ Decision = Literal["observe", "engage_main", "confirm_close"]
 ENGAGED_TIME_WINDOW_S = int(os.getenv("LUMI_GROUP_ENGAGED_WINDOW_S", "300"))
 ENGAGED_MESSAGE_WINDOW = int(os.getenv("LUMI_GROUP_ENGAGED_MSG_WINDOW", "5"))
 
-LUMI_NAMES = ("lumi", "loomy", "lummy", "lumii", "lumy")
-
-_LUMI_NAME_RE = re.compile(
-    r"\b(" + "|".join(re.escape(n) for n in LUMI_NAMES) + r")\b",
-    re.IGNORECASE,
-)
-
 CLOSING_PATTERNS = re.compile(
     r"\b(gracias|listo|chao|ok|ya|bye)\b.{0,15}\blum[iy]+\b"
     r"|\blum[iy]+\b.{0,15}\b(gracias|chao|bye)\b",
@@ -44,6 +37,7 @@ class _GroupMsg(Protocol):
     msg_id: str
     reply_to_msg_id: str | None
     mentioned_jids: list[str]
+    replied_to_participant: str | None
 
 
 @dataclass
@@ -71,22 +65,39 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _jid_local(jid: str) -> str:
+    """Devuelve la parte local del jid (antes de '@' y antes de ':'). WhatsApp usa
+    el mismo numero/lid con sufijos distintos (@s.whatsapp.net, @lid)."""
+    return jid.split("@", 1)[0].split(":", 1)[0] if jid else ""
+
+
+def _is_lumi_mentioned(mentioned_jids: list[str], lumi_jids: list[str]) -> bool:
+    if not lumi_jids or not mentioned_jids:
+        return False
+    lumi_locals = {_jid_local(j) for j in lumi_jids if j}
+    return any(_jid_local(j) in lumi_locals for j in mentioned_jids)
+
+
 def classify_inbound(
     group_id: str,
     msg: _GroupMsg,
-    lumi_jid: str | None = None,
+    lumi_jids: list[str] | None = None,
 ) -> Decision:
-    """Decide qué hacer con un mensaje entrante de grupo. Muta estado."""
+    """Decide qué hacer con un mensaje entrante de grupo. Muta estado.
+
+    lumi_jids: lista de jids propios de Lumi en la plataforma (puede incluir
+    formas @s.whatsapp.net y @lid). La comparación es por parte local del jid.
+    """
     state = _get(group_id)
     now = _now()
 
+    lumi_locals = {_jid_local(j) for j in (lumi_jids or []) if j}
     is_reply_to_lumi = bool(
-        msg.reply_to_msg_id and msg.reply_to_msg_id in state.last_lumi_msg_ids
+        (msg.reply_to_msg_id and msg.reply_to_msg_id in state.last_lumi_msg_ids)
+        or (msg.replied_to_participant
+            and _jid_local(msg.replied_to_participant) in lumi_locals)
     )
-    is_mention = (
-        (lumi_jid and lumi_jid in (msg.mentioned_jids or []))
-        or bool(_LUMI_NAME_RE.search(msg.text or ""))
-    )
+    is_mention = _is_lumi_mentioned(msg.mentioned_jids or [], lumi_jids or [])
     addressed = is_reply_to_lumi or is_mention
 
     if state.mode == "observing":
@@ -167,3 +178,78 @@ def get_mode(group_id: str) -> str:
 def reset_all() -> None:
     """Test helper."""
     _states.clear()
+
+
+# ── Mini-LLM de confirmación de cierre ────────────────────────────────────────
+# Cuando el determinista marca pending_close, esta función decide si el siguiente
+# mensaje es un cierre real (responde corto + CLOSE) o sigue la conversación
+# (KEEP → re-rutear al LLM principal).
+
+from agent.expression.synapses import chat, ModelGroup
+
+_CLOSE_TOKEN = re.compile(r"\[\s*CLOSE\s*\]", re.IGNORECASE)
+
+_CLOSING_SYSTEM_PROMPT = (
+    "Eres Lumi en un chat grupal. Acabas de tener una conversación con "
+    "alguien y ahora llega un mensaje nuevo. Decide si ese mensaje cierra la "
+    "conversación contigo o no.\n\n"
+    "REGLAS:\n"
+    "- Si es un cierre claro (agradecimiento, despedida, confirmación final "
+    "tipo 'gracias Lumi', 'listo Lumi', 'chao Lumi', 'ok perfecto Lumi'), "
+    "responde con 1 a 5 palabras naturales y termina tu respuesta con el "
+    "token literal [CLOSE].\n"
+    "- Si el mensaje continúa el tema, hace una nueva pregunta, o introduce "
+    "algo relacionado, responde SÓLO con el token literal [KEEP] (sin nada "
+    "más).\n"
+    "- Si tienes dudas, prefiere [KEEP].\n\n"
+    "Ejemplos:\n"
+    "Mensaje: 'gracias Lumi' → 'con gusto [CLOSE]'\n"
+    "Mensaje: 'listo Lumi, y qué tal el otro juego?' → '[KEEP]'\n"
+    "Mensaje: 'ok Lumi perfecto' → 'cuando quieras [CLOSE]'\n"
+)
+
+
+async def confirm_closing(
+    user_msg: str,
+    recent_history: list[dict] | None = None,
+) -> tuple[bool, str | None]:
+    """Retorna (is_close, short_reply).
+
+    is_close=True → short_reply tiene la respuesta breve a enviar al grupo.
+    is_close=False → el caller debe re-enrutar al LLM principal.
+    """
+    context_lines = []
+    for turn in (recent_history or [])[-4:]:
+        role = "Lumi" if turn["role"] == "assistant" else "Usuario"
+        context_lines.append(f"{role}: {turn['content']}")
+    context_block = "\n".join(context_lines)
+
+    user_content = (
+        (f"Contexto reciente:\n{context_block}\n\n" if context_block else "")
+        + f"Mensaje nuevo: {user_msg}"
+    )
+
+    messages = [
+        {"role": "system", "content": _CLOSING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        resp = await chat(
+            messages=messages,
+            model_group=ModelGroup.LIGHTWEIGHT,
+            max_tokens=40,
+            temperature=0.3,
+        )
+    except Exception as e:
+        logger.warning(f"[confirm_closing] LLM call failed ({e}); defaulting to KEEP")
+        return False, None
+
+    content = (resp.get("content") or "").strip()
+    logger.info(f"[confirm_closing] raw_response={content!r}")
+
+    if _CLOSE_TOKEN.search(content):
+        short_reply = _CLOSE_TOKEN.sub("", content).strip() or "con gusto"
+        return True, short_reply
+
+    return False, None
