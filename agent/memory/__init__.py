@@ -85,6 +85,7 @@ from agent.memory.mindstream.mentions import (
     update_consolidation_status,
     delete_mention,
     get_consolidated_grouped_by_person,
+    get_resolved_mentions_by_history_ids,
 )
 
 # Backward compat alias
@@ -151,6 +152,7 @@ __all__ = [
     "update_consolidation_status",
     "delete_mention",
     "get_consolidated_grouped_by_person",
+    "get_resolved_mentions_by_history_ids",
     "add_mood_log",
     "write_diary_entry",
     "read_recent_diary_entries",

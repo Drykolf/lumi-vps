@@ -16,12 +16,12 @@ _cached_system_prefix: str | None = None
 
 
 def _get_system_prefix() -> str:
-    """Lazy-load compact_soul.md + mood_policy.md, cache once per process."""
+    """Lazy-load lumi_soul.md + mood_policy.md, cache once per process."""
     global _cached_system_prefix
     if _cached_system_prefix is not None:
         return _cached_system_prefix
     parts = []
-    for rel in ("compact_soul.md", "principles/mood_policy.md"):
+    for rel in ("lumi_soul.md", "principles/mood_policy.md"):
         fp = _IDENTITY_DIR / rel
         if fp.exists():
             parts.append(fp.read_text(encoding="utf-8"))
@@ -141,7 +141,7 @@ def idle_decay(state: dict, minutes_elapsed: float) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 MOOD_EVAL_PROMPT = (
-    """Estás evaluando el estado interno (mood) de Lumi usando: compact_soul, mood_policy, el estado mood actual, el contexto reciente y las personas involucradas.
+    """Estás evaluando el estado interno (mood) de Lumi usando: lumi_soul, mood_policy, el estado mood actual, el contexto reciente y las personas involucradas.
 
 Sigue mood_policy como fuente de verdad.
 
@@ -200,7 +200,7 @@ def _build_eval_context(
     """
     Build (system_prompt, user_message) for the LLM mood evaluation call.
 
-    System = compact_soul.md + mood_policy.md + MOOD_EVAL_PROMPT
+    System = lumi_soul.md + mood_policy.md + MOOD_EVAL_PROMPT
     User   = timestamp + mood state + involved people + transcript grouped by session
     """
     from agent.cognition.working_memory import format_turns_grouped
@@ -212,13 +212,17 @@ def _build_eval_context(
 
     transcript = format_turns_grouped(messages, current_session_id=None, now=now)
 
-    involved_block = "# TODO" if not involved_people else json.dumps(involved_people, ensure_ascii=False)
+    involved_block = (
+        json.dumps(involved_people, ensure_ascii=False, indent=2)
+        if involved_people
+        else "ninguna"
+    )
 
     user_msg = (
         f"Current timestamp: {now_str}\n\n"
         "Current mood state:\n"
         f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
-        f"#Involved people:\n#{involved_block}\n\n"
+        f"Personas involucradas:\n{involved_block}\n\n"
         "Recent context:\n"
         f"{transcript}"
     )

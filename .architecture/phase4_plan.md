@@ -1,6 +1,6 @@
 # LUMI VPS — Phase 4 Unified Plan
 
-**Last updated:** May 23, 2026 (Block 2 redesigned to nightly + Block 5 partial wire; providers updated to 8)
+**Last updated:** May 23, 2026 (Block 2 redesigned to nightly + Block 5 partial wire; providers updated to 8; Block 3 shipped)
 **Source:** Merged from 3 sources:
 - `.architecture/plan.md` (original Phase 4 plan)
 - `.architecture/phase4_known_persons_read_path_plan.md` (Phase 4A — schema migration + social read-path)
@@ -14,7 +14,7 @@
 - **Block 2** (interest deltas) shipped May 21, 2026 — **redesigned to nightly batch** (Option 1, see decision below). `consolidate_person_interest` lives in quiescence as step 2.
 - **Block 4** (emotional honesty mode injection) **verified shipped** — implemented in `working_memory.py:210-218`.
 - **Block 5** (nightly stubs) — 2 of 6 subs wired (`consolidate_entity_mentions`, `consolidate_person_interest`); 4 still stubbed (`update_profiles`, `update_relations`, `consolidate_daily_memories`, `cleanup_memory_tiers`, `analyze_daily_tasks`); weekly decay still stub.
-- **Block 3** (mood eval involved_people) — deferred to next phase.
+- **Block 3** (mood eval involved_people) **verified shipped** 2026-05-23 — `_build_involved_people()` in `pulse.py` feeds resolved persons into `evaluate_mood`.
 - **Block 6** (attitude policy dynamic injection) — deferred to next phase.
 
 **Decision locked: nightly consolidation over per-turn evaluation.**
@@ -132,7 +132,7 @@ agent/
 | **relations (read)** | ✅ DONE 2026-05-21 — `get_relations()` called per resolved person | `social.py:303` |
 | **relations (write)** | ❌ `add_relation()` not called in conversation flow; nightly `update_relations` is stub | `social.py:243`, `quiescence.py:update_relations` |
 | **family inference** | ❌ `infer_family_relations()` never triggered; would live in `update_relations` | `social.py:910`, `quiescence.py` |
-| **involved people in mood eval** | ❌ `mood_check()` passes `None`, `_build_eval_context()` still says `"# TODO"` (Block 3 deferred) | `pulse.py:74`, `evaluation.py:211` |
+| **involved people in mood eval** | ✅ DONE 2026-05-23 — `_build_involved_people()` feeds resolved persons into `evaluate_mood` | `pulse.py:_build_involved_people`, `evaluation.py:_build_eval_context` |
 | **emotional honesty mode** | ✅ DONE — implemented in working_memory dynamic suffix | `working_memory.py:210-218` |
 | **nightly quiescence** | 🟡 2 of 6 subs wired (entity_mentions, person_interest); 4 still stubs | `quiescence.py` |
 | **weekly interest decay** | ❌ `weekly_interest_decay()` is `...` | `forgetting.py:19` |
@@ -252,21 +252,23 @@ giving a single source of truth for known_persons writes.
 
 ---
 
-### Block 3 — Enrich Mood Evaluation with Involved People 🔵 DEFERRED
+### Block 3 — Enrich Mood Evaluation with Involved People ✅ SHIPPED 2026-05-23
 
-`evaluate_mood()` in `evaluation.py` accepts `involved_people: dict | None` but `pulse.py:mood_check()` always passes `None`. The prompt says `"#Involved people:\n# TODO"`.
+`evaluate_mood()` in `evaluation.py` now receives a fully populated `involved_people` dict
+built from the resolved mentions in the message window.
 
-**Status:** Not in current scope. Block 2 (nightly interest) is independent —
-mood eval can read the **already-updated** `interest_score` from the previous
-night when this block ships.
+**Implementation:**
+- `_build_involved_people(messages)` in `pulse.py` collects history_ids from the window,
+  calls `get_resolved_mentions_by_history_ids()` (only `resolution_status='resolved'`),
+  and for each unique person_id loads `get_known_person()` + `get_relations()`.
+- Result: `{person_id: {display_name, interest_score, emotional_tone, relations}}` — or `None` if no resolved mentions.
+- `_build_eval_context()` in `evaluation.py` renders the block as `"Personas involucradas:\n{json}"` (or `"ninguna"`), replacing the old `# TODO` stub.
 
-**What to build (when picked up):**
-- In `mood_check()` → build an `involved_people` dict from the session's unevaluated turns:
-  - For each third party mentioned, bundle: `known_person` row + `relations`
-- Pass it into `evaluate_mood(messages, current, involved_people=involved)`
-- Fix `_build_eval_context()` line 211: replace `"# TODO"` with actual structured JSON
-
-**Files touched:** `agent/rhythm/routines/pulse.py`, `agent/affect/evaluation.py`
+**Files touched:**
+- `agent/memory/mindstream/mentions.py` — new `get_resolved_mentions_by_history_ids()`
+- `agent/memory/__init__.py` — exports new function
+- `agent/rhythm/routines/pulse.py` — new `_build_involved_people()`; passes result to `evaluate_mood`
+- `agent/affect/evaluation.py` — fixed `_build_eval_context()` format block
 
 **Depends on:** Block 1 (✅ shipped). Independent of Block 2.
 

@@ -472,7 +472,6 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 │   ├── identity/
 │   │   ├── lumi_soul.md               ← Core personality (identity, voice, emotional architecture, moral compass)
 │   │   ├── attitude.md                ← Expressive framework (emotion tags, mood-to-attitude mapping)
-│   │   ├── compact_soul.md            ← Compact version of lumi_soul for token-constrained contexts
 │   │   └── principles/                ← Behavioral rule docs (read-only policy)
 │   │       ├── interest_policy.md     ← How interest_score evolves per person (nightly batch)
 │   │       ├── memory_policy.md       ← What semantic data to store in Mem0 by interest level

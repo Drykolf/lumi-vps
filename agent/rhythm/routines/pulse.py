@@ -23,6 +23,46 @@ async def process_pending_mood_evaluations() -> None:
     ...
 
 
+def _build_involved_people(messages: list[dict]) -> dict:
+    """Build involved_people dict for mood eval from resolved mentions in a message window.
+    Only includes persons with resolution_status='resolved' (score >= 0.96)."""
+    from agent.memory import get_resolved_mentions_by_history_ids, get_known_person, get_relations
+
+    history_ids = [m["id"] for m in messages if "id" in m]
+    if not history_ids:
+        return {}
+
+    mentions = get_resolved_mentions_by_history_ids(history_ids)
+    seen: set[str] = set()
+    result: dict = {}
+
+    for mention in mentions:
+        pid = mention.get("resolved_person_id")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+
+        person = get_known_person(pid)
+        if not person:
+            continue
+
+        relations = get_relations(pid) or []
+        result[pid] = {
+            "display_name": person.get("display_name"),
+            "interest_score": person.get("interest_score"),
+            "emotional_tone": person.get("emotional_tone"),
+            "relations": [
+                {
+                    "relation_type": r.get("relation_type"),
+                    "target_person_id": r.get("target_person_id"),
+                }
+                for r in relations
+            ],
+        }
+
+    return result
+
+
 async def mood_check() -> None:
     """Hourly mood evaluation: idle decay or LLM contextual evaluation.
     Idle decay only triggers after MOOD_IDLE_DECAY_MINUTES of inactivity.
@@ -70,8 +110,8 @@ async def mood_check() -> None:
         else:
             new_state = current
     else:
-        # TODO: Add persons interest and profile of everyone involved
-        new_state, reasoning = await evaluate_mood(messages, current)
+        involved_people = _build_involved_people(messages)
+        new_state, reasoning = await evaluate_mood(messages, current, involved_people=involved_people or None)
         trigger = "mood_check"
         note = f"LLM eval | msgs={len(messages)} | {reasoning[:120]}"
         max_id = max(m["id"] for m in messages)

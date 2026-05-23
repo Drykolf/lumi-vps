@@ -158,6 +158,24 @@ def delete_mention(mention_id: int) -> None:
     conn.close()
 
 
+def get_resolved_mentions_by_history_ids(history_ids: list[int]) -> list[dict]:
+    """Resolved mentions for a list of history row ids, used by mood_check."""
+    if not history_ids:
+        return []
+    placeholders = ",".join("?" for _ in history_ids)
+    conn = traces.get_conn()
+    rows = conn.execute(
+        f"""SELECT * FROM person_mentions
+            WHERE history_id IN ({placeholders})
+              AND resolution_status = 'resolved'
+              AND resolved_person_id IS NOT NULL
+            ORDER BY created_at ASC""",
+        tuple(history_ids),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_consolidated_grouped_by_person(person_ids: set[str]) -> dict[str, list[dict]]:
     """Return all consolidated mentions for the given person_ids, grouped by
     resolved_person_id. Empty set → empty dict."""

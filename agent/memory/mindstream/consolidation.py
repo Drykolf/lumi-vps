@@ -165,7 +165,7 @@ def _build_diary_system_prompt() -> str:
     if _cached_diary_system is not None:
         return _cached_diary_system
     parts = []
-    for rel in ("compact_soul.md", "attitude.md"):
+    for rel in ("lumi_soul.md", "attitude.md"):
         fp = _IDENTITY_DIR / rel
         if fp.exists():
             parts.append(fp.read_text(encoding="utf-8"))
@@ -453,7 +453,7 @@ def _build_entity_system_prompt() -> str:
     if _cached_entity_system is not None:
         return _cached_entity_system
     parts = []
-    soul = _IDENTITY_DIR / "compact_soul.md"
+    soul = _IDENTITY_DIR / "lumi_soul.md"
     if soul.exists():
         parts.append(soul.read_text(encoding="utf-8"))
     parts.append(_ENTITY_CONSOLIDATION_PROMPT)
@@ -808,7 +808,7 @@ def _build_interest_system_prompt() -> str:
     if _cached_interest_system is not None:
         return _cached_interest_system
     parts = []
-    for rel in ("compact_soul.md", "principles/interest_policy.md"):
+    for rel in ("lumi_soul.md", "principles/interest_policy.md"):
         fp = _IDENTITY_DIR / rel
         if fp.exists():
             parts.append(fp.read_text(encoding="utf-8"))
