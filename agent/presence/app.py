@@ -150,6 +150,64 @@ from agent.presence.conduits.whatsapp import (
     parse_inbound,
     send_text,
 )
+from agent.presence.conduits import group_policy
+from agent.presence.conduits.group_closing_llm import confirm_closing
+from agent.memory import save_turn, get_recent_session_log
+
+LUMI_WHATSAPP_JID = os.getenv("LUMI_WHATSAPP_JID")  # ej. "573001234567@s.whatsapp.net"
+
+
+async def _handle_group_message(parsed):
+    """Group flow: classify → observe / engage_main / confirm_close."""
+    decision = group_policy.classify_inbound(
+        parsed.remote_jid, parsed, lumi_jid=LUMI_WHATSAPP_JID
+    )
+
+    if decision == "observe":
+        save_turn(
+            parsed.person_id, "user", parsed.text,
+            session_id=parsed.metadata["session_id"],
+        )
+        return {"status": "observed", "person_id": parsed.person_id}
+
+    if decision == "confirm_close":
+        recent = get_recent_session_log(
+            parsed.metadata["session_id"], limit=4
+        )
+        is_close, short_reply = await confirm_closing(parsed.text, recent)
+        if is_close:
+            save_turn(
+                parsed.person_id, "user", parsed.text,
+                session_id=parsed.metadata["session_id"],
+            )
+            try:
+                sent_id = await send_text(
+                    parsed.instance, parsed.remote_jid, short_reply
+                )
+            except Exception as e:
+                logger.error(f"[whatsapp-webhook] sendText (close) failed: {e}")
+                sent_id = None
+            save_turn(
+                parsed.person_id, "assistant", short_reply,
+                session_id=parsed.metadata["session_id"],
+            )
+            group_policy.close_window(parsed.remote_jid)
+            return {"status": "closed", "person_id": parsed.person_id, "msg_id": sent_id}
+        group_policy.reopen_window(parsed.remote_jid)
+        # fallthrough → engage_main
+
+    # engage_main (o reabierto tras KEEP)
+    parsed.metadata["channel_type"] = "group"
+    reply = await run(parsed.person_id, parsed.text, parsed.metadata)
+    try:
+        sent_id = await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"[whatsapp-webhook] sendText failed: {e}")
+        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
+    group_policy.register_lumi_response(
+        parsed.remote_jid, sent_id, user_msg_text=parsed.text
+    )
+    return {"status": "ok", "person_id": parsed.person_id}
 
 
 @app.post("/v1/chat/whatsapp")
@@ -172,11 +230,15 @@ async def whatsapp_webhook(request: Request):
     logger.info(
         f"[whatsapp-webhook] inbound person_id={parsed.person_id} "
         f"instance={parsed.instance} session_id={parsed.metadata['session_id']} "
-        f"text={parsed.text!r}"
+        f"is_group={parsed.is_group} text={parsed.text!r}"
     )
 
+    if parsed.is_group:
+        return await _handle_group_message(parsed)
+
+    # 1:1 flow
+    parsed.metadata["channel_type"] = "direct"
     reply = await run(parsed.person_id, parsed.text, parsed.metadata)
-    #reply = "hola, soy Lumi"
     try:
         await send_text(parsed.instance, parsed.remote_jid, reply)
     except Exception as e:

@@ -1,7 +1,7 @@
 """WhatsApp / Evolution API integration helpers."""
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -27,13 +27,17 @@ def format_for_whatsapp(text: str) -> str:
     return text.strip()
 
 
-async def send_text(instance: str, jid: str, text: str) -> None:
-    """POST /message/sendText/{instance}. jid puede ser persona o grupo."""
+async def send_text(instance: str, jid: str, text: str) -> str | None:
+    """POST /message/sendText/{instance}. jid puede ser persona o grupo.
+
+    Retorna el msg_id (key.id) del mensaje enviado, o None si no se envió
+    o si la respuesta no lo contiene.
+    """
     api_key = os.getenv("EVOLUTION_API_KEY") or ""
     body = format_for_whatsapp(text)
     if not body:
         logger.info(f"[whatsapp] skipping empty send to jid={jid}")
-        return
+        return None
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{EVOLUTION_API_URL}/message/sendText/{instance}",
@@ -41,6 +45,11 @@ async def send_text(instance: str, jid: str, text: str) -> None:
             headers={"apikey": api_key},
         )
         resp.raise_for_status()
+        try:
+            data = resp.json()
+        except Exception:
+            return None
+        return ((data.get("key") or {}).get("id"))
 
 
 # ── Inbound: validadores y extractores ────────────────────────────────────────
@@ -72,6 +81,17 @@ def extract_text(data: dict) -> str | None:
         msg.get("conversation")
         or (msg.get("extendedTextMessage") or {}).get("text")
     )
+
+
+def extract_reply_and_mentions(data: dict) -> tuple[str | None, list[str]]:
+    """Extrae (reply_to_msg_id, mentioned_jids) de extendedTextMessage.contextInfo."""
+    msg = data.get("message") or {}
+    ctx = (msg.get("extendedTextMessage") or {}).get("contextInfo") or {}
+    reply_to = ctx.get("stanzaId")
+    mentions = ctx.get("mentionedJid") or []
+    if not isinstance(mentions, list):
+        mentions = []
+    return reply_to, mentions
 
 
 def extract_sender_jid(data: dict, remote_jid: str) -> str | None:
@@ -112,6 +132,11 @@ class InboundMessage:
     instance: str
     remote_jid: str
     metadata: dict
+    msg_id: str | None = None
+    reply_to_msg_id: str | None = None
+    mentioned_jids: list[str] = field(default_factory=list)
+    is_group: bool = False
+    push_name: str | None = None
 
 
 @dataclass
@@ -151,10 +176,16 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
         )
         return Skip("unknown contact")
 
+    reply_to, mentions = extract_reply_and_mentions(data)
     return InboundMessage(
         person_id=row["person_id"],
         text=text,
         instance=payload.get("instance"),
         remote_jid=remote_jid,
         metadata=build_metadata(remote_jid),
+        msg_id=(data.get("key") or {}).get("id"),
+        reply_to_msg_id=reply_to,
+        mentioned_jids=mentions,
+        is_group=remote_jid.endswith("@g.us"),
+        push_name=data.get("pushName"),
     )

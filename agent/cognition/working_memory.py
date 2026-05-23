@@ -279,6 +279,15 @@ async def _build_dynamic_suffix(
     session_id = metadata.get("session_id", "unknown")
     parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str)
 
+    if metadata.get("channel_type") == "group":
+        parts.append(
+            "[Grupo] Estas participando en un grupo con varias personas. "
+            "Otros ademas de quien te escribio estan leyendo. "
+            "Manten tu tono natural pero ligeramente mas publico: no asumas "
+            "la misma familiaridad que en un 1:1, y se concisa para no "
+            "saturar el grupo."
+        )
+
     return "\n\n".join(parts)
 
 
