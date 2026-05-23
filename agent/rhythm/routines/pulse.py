@@ -77,7 +77,6 @@ async def mood_check() -> None:
     window = timedelta(minutes=MOOD_CHECK_MINUTES * 1.5)
     since_ts = (now - window).isoformat()
 
-    # TODO: Refactor messages by user before sending to LLM
     messages = get_unmood_evaluated(since_ts, limit=200)
     current = get_state()
 

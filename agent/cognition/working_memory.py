@@ -196,6 +196,29 @@ def _format_entity_sections(
     return sections, scoped_memories
 
 
+def _build_posture_hint(entities_context: list[dict]) -> str | None:
+    """Return a [Postura] directive if any resolved person has a low interest score."""
+    scores = [
+        (ctx.get("person") or {}).get("interest_score", 0.10)
+        for ctx in entities_context
+        if ctx.get("status") == "resolved" and not ctx.get("is_self_mention")
+    ]
+    if not scores:
+        return None
+    min_score = min(scores)
+    if min_score < 0:
+        return (
+            "[Postura] Hay una persona en zona de interés negativo en esta conversación. "
+            "Respuestas mínimas, formales, sin apertura personal."
+        )
+    if min_score < 0.10:
+        return (
+            "[Postura] Hay una persona con bajo interés en esta conversación. "
+            "Respuestas neutras, sin calidez extra."
+        )
+    return None
+
+
 async def _build_dynamic_suffix(
     user_id: str,
     message: str,
@@ -258,6 +281,11 @@ async def _build_dynamic_suffix(
         entities_context or [], user_id, speaker_display
     )
     parts.extend(entity_sections)
+
+    # 6b. Posture hint from interest scores (Block 6)
+    posture = _build_posture_hint(entities_context or [])
+    if posture:
+        parts.append(posture)
 
     # 7. Relevant memories (per-turn)
     sid = metadata.get("session_id", "default")

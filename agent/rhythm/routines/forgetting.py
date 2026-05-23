@@ -17,7 +17,10 @@ async def weekly_forgetting() -> None:
 
 
 async def weekly_interest_decay() -> None:
-    ...
+    """Apply 28-day interest decay to inactive non-Jose persons."""
+    from agent.memory import run_decay
+    run_decay()
+    logger.info("weekly interest decay applied")
 
 
 async def cleanup_old_logs() -> None:

@@ -1,6 +1,6 @@
 # LUMI VPS — Phase 4 Unified Plan
 
-**Last updated:** May 23, 2026 (Block 2 redesigned to nightly + Block 5 partial wire; providers updated to 8; Block 3 shipped)
+**Last updated:** May 24, 2026 (Block 6 shipped)
 **Source:** Merged from 3 sources:
 - `.architecture/plan.md` (original Phase 4 plan)
 - `.architecture/phase4_known_persons_read_path_plan.md` (Phase 4A — schema migration + social read-path)
@@ -13,9 +13,9 @@
 - **Block 1** (read-path) shipped May 21, 2026 — per-turn third-party entity resolution + injection is live.
 - **Block 2** (interest deltas) shipped May 21, 2026 — **redesigned to nightly batch** (Option 1, see decision below). `consolidate_person_interest` lives in quiescence as step 2.
 - **Block 4** (emotional honesty mode injection) **verified shipped** — implemented in `working_memory.py:210-218`.
-- **Block 5** (nightly stubs) — 2 of 6 subs wired (`consolidate_entity_mentions`, `consolidate_person_interest`); 4 still stubbed (`update_profiles`, `update_relations`, `consolidate_daily_memories`, `cleanup_memory_tiers`, `analyze_daily_tasks`); weekly decay still stub.
+- **Block 5** (nightly stubs) — 2 of 6 subs wired (`consolidate_entity_mentions`, `consolidate_person_interest`); 4 still stubbed (`update_profiles`, `update_relations`, `consolidate_daily_memories`, `cleanup_memory_tiers`, `analyze_daily_tasks`); weekly decay wired (**5a shipped 2026-05-23**).
 - **Block 3** (mood eval involved_people) **verified shipped** 2026-05-23 — `_build_involved_people()` in `pulse.py` feeds resolved persons into `evaluate_mood`.
-- **Block 6** (attitude policy dynamic injection) — deferred to next phase.
+- **Block 6** (attitude policy dynamic injection) **verified shipped** 2026-05-24 — `_build_posture_hint()` in `working_memory.py` injects `[Postura]` directives based on resolved persons' interest scores.
 
 **Decision locked: nightly consolidation over per-turn evaluation.**
 Per-turn delta evaluation was deprecated. The schema already supported batch
@@ -135,8 +135,8 @@ agent/
 | **involved people in mood eval** | ✅ DONE 2026-05-23 — `_build_involved_people()` feeds resolved persons into `evaluate_mood` | `pulse.py:_build_involved_people`, `evaluation.py:_build_eval_context` |
 | **emotional honesty mode** | ✅ DONE — implemented in working_memory dynamic suffix | `working_memory.py:210-218` |
 | **nightly quiescence** | 🟡 2 of 6 subs wired (entity_mentions, person_interest); 4 still stubs | `quiescence.py` |
-| **weekly interest decay** | ❌ `weekly_interest_decay()` is `...` | `forgetting.py:19` |
-| **attitude policy injection** | ❌ Not started (Block 6 deferred) | |
+| **weekly interest decay** | ✅ DONE 2026-05-23 — `weekly_interest_decay()` calls `run_decay()` | `social.py:942`, `forgetting.py:19` |
+| **attitude policy injection** | ✅ DONE 2026-05-24 — `_build_posture_hint()` injects `[Postura]` per resolved person interest score | `working_memory.py:_build_posture_hint` |
 
 ---
 
@@ -285,14 +285,10 @@ manages the flip; this block consumes it.
 
 ### Block 5 — Wire Stubs to Real Code 🟡 PARTIAL
 
-#### 5a — Weekly interest decay (`forgetting.py:19`) ❌ stub
-```python
-# Current: ...
-# Fix:
-from agent.memory import run_decay
-run_decay()  # Already implemented in social.py:874
-```
-Also wire `decay_inactive_people()` and `forget_stale_people()` if needed.
+#### 5a — Weekly interest decay (`forgetting.py:19`) ✅ SHIPPED 2026-05-23
+
+`weekly_interest_decay()` now calls `run_decay()` from `agent.memory`.
+`decay_inactive_people()` and `forget_stale_people()` remain stubs — not called from scheduler; reserved for `cleanup_memory_tiers` (step 7) in a future sub-block.
 
 #### 5b — Nightly quiescence — new orchestration order
 
@@ -327,19 +323,16 @@ The nightly `nightly_quiescence()` runs these subs in order (see
 
 ---
 
-### Block 6 — Attitude Policy Dynamic Injection 🔵 DEFERRED
+### Block 6 — Attitude Policy Dynamic Injection ✅ SHIPPED 2026-05-24
 
-`attitude.md` is loaded into the cached prefix alongside `lumi_soul.md`, but the dynamic rules (score-driven posture, curiosity gate, reality filter) are not injected per-turn based on current context.
+`_build_posture_hint(entities_context)` in `working_memory.py` inspects resolved persons' `interest_score` and injects a `[Postura]` directive into the dynamic suffix:
+- `interest_score < 0` → `[Postura] Persona en zona de interés negativo. Respuestas mínimas, formales, sin apertura personal.`
+- `interest_score < 0.10` → `[Postura] Persona con bajo interés. Respuestas neutras, sin calidez extra.`
+- `emotional_honesty_mode` posture already covered by the `[Modo honestidad emocional]` block (Block 4).
 
-**What to build (when picked up):**
-- In `_build_dynamic_suffix()`, inject 1-2 line summaries based on context:
-  - If any mentioned person has `interest_score < 0.10` → `"[Postura] Persona con bajo interés. Respuestas neutras, sin calidez extra."`
-  - If any mentioned person has `interest_score < 0` → `"[Postura] Persona en zona negativa. Respuestas mínimas, formales, sin apertura personal."`
-  - If `emotional_honesty_mode` is active → `"[Postura] Modo honesto: franqueza sobre diplomacia."`
+**Files touched:** `agent/cognition/working_memory.py` — new `_build_posture_hint()`; wired as step 6b in `_build_dynamic_suffix()`
 
-**Files touched:** `agent/cognition/working_memory.py`
-
-**Depends on:** Block 1 (✅ shipped — needs interest scores), Block 4 (✅ shipped — flag available)
+**Depends on:** Block 1 (✅), Block 4 (✅)
 
 ---
 
@@ -430,7 +423,7 @@ After these sessions, Phase 4 is complete:
 | `agent/rhythm/routines/quiescence.py:extract_daily_learnings` | Step 6 — WIRED | B5 ✅ |
 | `agent/rhythm/routines/quiescence.py:cleanup_memory_tiers` | Step 7 — stub `...` | B5 pending |
 | `agent/rhythm/routines/quiescence.py:analyze_daily_tasks` | Step 8 — stub `...` | B5 pending |
-| `agent/rhythm/routines/forgetting.py:19` | `weekly_interest_decay()` — stub `...` | B5 pending |
+| `agent/rhythm/routines/forgetting.py:19` | `weekly_interest_decay()` — wired to `run_decay()` | B5a ✅ |
 | `agent/identity/principles/interest_policy.md` | Updated to nightly-batch design | B2 ✅ |
 | `agent/identity/principles/memory_search.md` | 5-step search pipeline spec | B1 design |
 
