@@ -286,6 +286,7 @@ async def extract_daily_learnings() -> dict:
 # ── Step 7 ─────────────────────────────────────────────────────────────────────
 
 async def analyze_daily_tasks() -> dict | None:
+    #TODO
     """B5 pending — detect pending tasks mentioned in turns since last
     successful run and stage them in the `skill_proposals` table.
 

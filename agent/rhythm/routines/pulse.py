@@ -67,17 +67,21 @@ async def mood_check() -> None:
     """Hourly mood evaluation: idle decay or LLM contextual evaluation.
     Idle decay only triggers after MOOD_IDLE_DECAY_MINUTES of inactivity.
     Uses actual elapsed idle time as input to the decay formula.
-    Saves updated state to core.db, marks history rows as mood_evaluated.
-    Logs every mood change to traces.db mood_logs table."""
+    Saves updated state to core.db. Logs every mood change to traces.db mood_logs table.
+    Uses heartbeat_state.last_success_at as period_start bookmark (same pattern as quiescence)."""
     from datetime import datetime, timezone, timedelta
     from agent.affect import get_state, idle_decay, evaluate_mood, write_state, check_emotional_honesty_mode
-    from agent.memory import get_unmood_evaluated, mark_mood_evaluated, add_mood_log
+    from agent.memory import get_history_since, add_mood_log
+    from agent.rhythm.state import get_last_success
 
     now = datetime.now(timezone.utc)
-    window = timedelta(minutes=MOOD_CHECK_MINUTES * 1.5)
-    since_ts = (now - window).isoformat()
+    last_success = await get_last_success("mood_check")
+    if last_success:
+        since_ts = last_success.isoformat()
+    else:
+        since_ts = (now - timedelta(minutes=MOOD_CHECK_MINUTES * 1.5)).isoformat()
 
-    messages = get_unmood_evaluated(since_ts, limit=200)
+    messages = get_history_since(since_ts, limit=200)
     current = get_state()
 
     trigger = None
@@ -87,7 +91,7 @@ async def mood_check() -> None:
         last_at = current.get("last_interaction_at")
         if last_at:
             last_dt = datetime.fromisoformat(last_at.replace("Z", "+00:00"))
-            elapsed = (now - last_dt).total_seconds() / 60.0 #minutos de inactividad
+            elapsed = (now - last_dt).total_seconds() / 60.0
         else:
             elapsed = MOOD_IDLE_DECAY_MINUTES
 
@@ -113,12 +117,10 @@ async def mood_check() -> None:
         new_state, reasoning = await evaluate_mood(messages, current, involved_people=involved_people or None)
         trigger = "mood_check"
         note = f"LLM eval | msgs={len(messages)} | {reasoning[:120]}"
-        max_id = max(m["id"] for m in messages)
-        mark_mood_evaluated(max_id)
         mood_change = True
         logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:120]}")
 
-    if mood_change: 
+    if mood_change:
         write_state(new_state)
         if trigger:
             add_mood_log(new_state, trigger_source=trigger, note=note)

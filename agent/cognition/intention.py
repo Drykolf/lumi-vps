@@ -43,7 +43,7 @@ async def _tool_check(sid: str, message: str, user_id: str = "user", prompt_cach
 
     tools_text = "\n".join(tool_lines)
 
-    turns = get_recent_session_log(sid, include_summarized=True, limit=6)
+    turns = get_recent_session_log(sid, limit=6)
     transcript = ""
     for t in turns:
         speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)
@@ -158,7 +158,7 @@ async def _formulate_query(message: str, tool_name: str, sid: str, prompt_cache_
         pinfo = param_props[p]
         desc_lines.append(f"'{p}' ({pinfo.get('type', 'string')}): {pinfo.get('description', p)}")
 
-    turns = get_recent_session_log(sid, include_summarized=True, limit=6)
+    turns = get_recent_session_log(sid, limit=6)
     transcript = ""
     for t in turns:
         role = "Jose" if t["role"] == "user" else "Lumi"

@@ -16,17 +16,8 @@ CREATE TABLE IF NOT EXISTS history (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT 'default',
-    summarized INTEGER NOT NULL DEFAULT 0,
-    mood_evaluated INTEGER NOT NULL DEFAULT 0,
-    memory_evaluated INTEGER NOT NULL DEFAULT 0,
     ts TEXT NOT NULL
 );
-
-CREATE INDEX IF NOT EXISTS idx_history_mood_ts
-    ON history(mood_evaluated, ts);
-
-CREATE INDEX IF NOT EXISTS idx_history_memory_ts
-    ON history(memory_evaluated, ts);
 
 -- ============================================================
 -- DIARY — Lumi's narrative log

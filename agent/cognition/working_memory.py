@@ -289,7 +289,7 @@ async def _build_dynamic_suffix(
 
     # 7. Relevant memories (per-turn)
     sid = metadata.get("session_id", "default")
-    recent_for_dedup = get_recent_session_log(sid, include_summarized=True, limit=10)
+    recent_for_dedup = get_recent_session_log(sid, limit=10)
     merged_memories: list[str] = []
     for m in relevant_memories or []:
         if m and m not in merged_memories:

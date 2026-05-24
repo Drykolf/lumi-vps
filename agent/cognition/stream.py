@@ -68,7 +68,7 @@ async def _entities_check(message: str, sid: str, user_id: str, prompt_cache_key
     """Lightweight LLM call to detect third-party entities in user message. ~200 tokens."""
     default = []
 
-    turns = get_recent_session_log(sid, include_summarized=True, limit=1)
+    turns = get_recent_session_log(sid, limit=1)
     transcript = ""
     for t in turns:
         speaker = t["user_id"] if t["role"] == "user" else "Lumi"
