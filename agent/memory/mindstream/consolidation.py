@@ -8,7 +8,7 @@ Nightly LLM consolidation:
 """
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from agent.subconscious import traces
 from agent.substrate.logger import get_logger
@@ -817,9 +817,15 @@ def _build_interest_system_prompt() -> str:
     return _cached_interest_system
 
 
-async def consolidate_person_interest(affected_person_ids: set[str]) -> dict:
+async def consolidate_person_interest(period_start: datetime | None = None) -> dict:
     """Nightly step 2: evaluate per-person interest deltas via LLM.
-    `affected_person_ids` comes from consolidate_entity_mentions's return value.
+
+    Selects all consolidated mentions stamped on/after `period_start` (typically
+    the last successful run's timestamp, read from heartbeat_state by the
+    orchestrator). If a prior night's step 2 failed, the window stretches back
+    automatically and yesterday's mentions are caught up tonight.
+
+    Defaults to last 24h when `period_start` is None (first run after wipe).
     Skips 'jose' (interest_score floor enforced separately)."""
     from agent.memory.mindstream import mentions as mentions_mod
     from agent.memory.mindstream import social
@@ -832,15 +838,16 @@ async def consolidate_person_interest(affected_person_ids: set[str]) -> dict:
         "skipped": 0,
     }
 
-    # Drop Jose — protected by floor 0.70, evaluated separately if ever.
-    target_ids = {pid for pid in affected_person_ids if pid != "jose"}
-    if not target_ids:
-        logger.info("[interest_consolidation] no non-Jose persons to evaluate")
-        return metrics
+    if period_start is None:
+        period_start = datetime.now(UTC) - timedelta(hours=24)
+    logger.info(f"[interest_consolidation] window starts at {period_start.isoformat()}")
 
-    grouped = mentions_mod.get_consolidated_grouped_by_person(target_ids)
+    grouped_all = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
+    # Drop Jose — protected by floor 0.70, evaluated separately if ever.
+    grouped = {pid: rows for pid, rows in grouped_all.items() if pid != "jose"}
+
     if not grouped:
-        logger.info("[interest_consolidation] no consolidated mentions for targets")
+        logger.info("[interest_consolidation] no consolidated mentions in window")
         return metrics
 
     payload_persons = []
@@ -967,3 +974,620 @@ async def consolidate_person_interest(affected_person_ids: set[str]) -> dict:
     )
     return metrics
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Shared per-person context builder (used by steps 3 and 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_per_person_context(
+    period_start: datetime,
+    include_relations: bool = False,
+) -> tuple[list[dict], dict]:
+    """Build the payload `persons` list shared by update_profiles and
+    update_relations. Returns (payload_persons, raw_grouped_mentions).
+
+    For each affected person (mentioned & consolidated in window, excluding Jose):
+      - current identity state (name, aliases, emotional_tone, status, interest_score)
+      - the full transcripts of every session the person appeared in (slimmed)
+      - the raw mentions in the window
+      - optionally: current_relations (only when include_relations=True)
+    """
+    from agent.memory.mindstream import mentions as mentions_mod
+    from agent.memory.mindstream import social
+    from agent.memory.episodic import get_history_grouped_by_session
+
+    grouped_all = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
+    grouped = {pid: rows for pid, rows in grouped_all.items() if pid != "jose"}
+    if not grouped:
+        return [], grouped
+
+    now_iso = datetime.now(UTC).isoformat()
+    raw_transcripts = get_history_grouped_by_session(
+        period_start.isoformat(), now_iso
+    )
+    transcripts = {
+        sid: _slim_transcript(msgs) for sid, msgs in raw_transcripts.items()
+    }
+
+    payload_persons: list[dict] = []
+    for pid, mention_rows in grouped.items():
+        kp = social.get_known_person(pid)
+        if not kp:
+            logger.warning(f"[per_person_context] missing known_persons row for {pid}")
+            continue
+
+        session_ids_for_person = {m["session_id"] for m in mention_rows}
+        sessions_for_person = {
+            sid: transcripts[sid]
+            for sid in session_ids_for_person
+            if sid in transcripts
+        }
+
+        mentions_summary = [
+            {
+                "created_at": m["created_at"],
+                "raw_text": m["raw_text"],
+                "session_id": m["session_id"],
+                "history_id": m["history_id"],
+            }
+            for m in mention_rows
+        ]
+
+        person_payload = {
+            "person_id": pid,
+            "display_name": kp["display_name"],
+            "current_state": {
+                "canonical_name": kp.get("canonical_name"),
+                "aliases": json.loads(kp.get("aliases_json") or "[]"),
+                "emotional_tone": kp.get("emotional_tone"),
+                "status": kp.get("status"),
+                "interest_score": kp.get("interest_score"),
+            },
+            "sessions": sessions_for_person,
+            "mentions": mentions_summary,
+        }
+        if include_relations:
+            person_payload["current_relations"] = social.get_relations(pid)
+
+        payload_persons.append(person_payload)
+
+    return payload_persons, grouped
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Profile consolidation (nightly step 3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_PROFILE_EXTRACTION_PROMPT = """\
+# Tarea: refinar identidad de personas (nightly step 3)
+
+Estás revisando lo que pasó hoy con personas específicas y decides, **solo para
+campos de identidad**, qué se debe actualizar en `known_persons`.
+
+## Alcance ESTRICTO
+
+Esto NO es un consolidador biográfico. Aquí solo se refinan datos identitarios:
+
+- **`new_aliases`** — apellidos descubiertos, apodos, formas alternativas del nombre.
+- **`name_correction`** — corregir `display_name` o `canonical_name` si la versión actual está incompleta o equivocada (p.ej. estaba "Gloria" y aparece "Gloria Barco").
+- **`refined_emotional_tone`** — el tono emocional resultante de las interacciones de la ventana.
+
+**NO emitas** hechos biográficos, eventos, estudios, trabajo, gustos, ubicación,
+opiniones, recuerdos. Esos son trabajo de otro paso (memorias en Mem0).
+
+❌ EJEMPLO INCORRECTO:
+```
+{"biographical_note": "Estudia enfermería"}
+```
+Eso NO entra acá. Si lo ves, ignóralo.
+
+✅ EJEMPLO CORRECTO:
+```
+{"new_aliases": [{"value": "Gloris", "alias_type": "nickname",
+                  "confirmed": true, "confidence": 0.85}]}
+```
+
+## Lo que recibes
+
+En el mensaje del usuario:
+
+1. `now_utc` — timestamp del momento actual.
+2. `persons` — lista de personas afectadas en la ventana. Cada una trae:
+   - `person_id`, `display_name`
+   - `current_state` con `canonical_name`, `aliases` (lista de dicts con `value`/`norm`/`type`/`confirmed`/`confidence`), `emotional_tone`, `status`, `interest_score`
+   - `sessions` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos de las sesiones donde la persona apareció (incluye tus propios mensajes con `from: "lumi"` y mensajes de otros usuarios del grupo).
+   - `mentions` — lista de las menciones de esa persona en la ventana (`created_at`, `raw_text`, `session_id`, `history_id`).
+
+## Tu tarea
+
+Por cada persona, decide qué actualizar. Solo emite campos cuando hay evidencia
+clara en `sessions` o `mentions`. Si no hay nada que refinar, omite la persona.
+
+### `new_aliases`
+
+Solo nombres NO presentes ya en `current_state.aliases` (normalizado: compara
+case-insensitive, sin tildes ni espacios extra). Cada alias:
+
+```json
+{"value": "Gloria Barco", "alias_type": "full_name",
+ "confirmed": true, "confidence": 0.95}
+```
+
+- `alias_type` ∈ `full_name | first_name | nickname | alias | role`
+- `confirmed`: `true` si el alias aparece dicho directamente por la persona o
+  por Jose con claridad; `false` si es por inferencia débil.
+- `confidence` ∈ [0.0, 1.0].
+
+### `name_correction` (opcional, `null` por defecto)
+
+Solo emitir si el texto evidencia que el `display_name` o `canonical_name`
+actual está incompleto/incorrecto. **Conservador**: si dudas, prefiere
+agregar un alias en vez de corregir el nombre canónico.
+
+```json
+{"display_name": "Gloria Barco", "canonical_name": "Gloria Barco",
+ "reason": "Jose mencionó el apellido completo por primera vez."}
+```
+
+### `refined_emotional_tone` (opcional, `null` por defecto)
+
+Solo valores: `positive | neutral | negative | complex`. **No uses** `warm`,
+`cold` u otros — el schema solo acepta esos cuatro. `null` para mantener el
+tono actual.
+
+Cambia el tono solo si el patrón emocional de la ventana ya no calza con el
+actual. No oscilar por una sola conversación intensa.
+
+## Formato de salida
+
+JSON estricto. Nada antes, nada después.
+
+```
+{
+  "persons": [
+    {
+      "person_id": "gloria1",
+      "new_aliases": [
+        {"value": "Gloris", "alias_type": "nickname",
+         "confirmed": true, "confidence": 0.85}
+      ],
+      "name_correction": null,
+      "refined_emotional_tone": "positive",
+      "reason": "Conversación afectuosa en sesión X; aparece diminutivo nuevo."
+    }
+  ]
+}
+```
+
+`reason` en español neutro colombiano, una línea. No inventes nada que no esté
+en los `sessions` o `mentions`.
+"""
+
+_cached_profile_system: str | None = None
+
+
+def _build_profile_system_prompt() -> str:
+    global _cached_profile_system
+    if _cached_profile_system is not None:
+        return _cached_profile_system
+    parts = []
+    soul = _IDENTITY_DIR / "lumi_soul.md"
+    if soul.exists():
+        parts.append(soul.read_text(encoding="utf-8"))
+    parts.append(_PROFILE_EXTRACTION_PROMPT)
+    _cached_profile_system = "\n\n---\n\n".join(parts)
+    return _cached_profile_system
+
+
+_VALID_EMOTIONAL_TONES = {"positive", "neutral", "negative", "complex"}
+_VALID_ALIAS_TYPES = {"full_name", "first_name", "nickname", "alias", "role"}
+
+
+async def update_profiles(period_start: datetime | None = None) -> dict:
+    """Nightly step 3: refine identity fields (aliases, name, emotional_tone)
+    of persons mentioned since `period_start`.
+
+    Identity-only — biographical facts (studies, work, location, events) are
+    NOT extracted here; they belong to Mem0 (step 5, future). The `notes` field
+    on `known_persons` is reserved for structural meta-info and is not touched.
+
+    Recovery via heartbeat_state: when period_start is None, defaults to last
+    24h. If a prior run failed, `last_success_at` stayed frozen and tonight's
+    window stretches back automatically.
+    """
+    from agent.memory.mindstream import social
+
+    metrics = {
+        "persons_evaluated": 0,
+        "aliases_added": 0,
+        "names_corrected": 0,
+        "tones_updated": 0,
+        "skipped": 0,
+    }
+
+    if period_start is None:
+        period_start = datetime.now(UTC) - timedelta(hours=24)
+    logger.info(f"[profile_consolidation] window starts at {period_start.isoformat()}")
+
+    payload_persons, _ = _build_per_person_context(period_start, include_relations=False)
+    if not payload_persons:
+        logger.info("[profile_consolidation] no consolidated mentions in window")
+        return metrics
+
+    payload = {
+        "now_utc": datetime.now(UTC).isoformat(),
+        "persons": payload_persons,
+    }
+
+    logger.info(
+        f"[profile_consolidation] sending to LLM: persons={len(payload_persons)}"
+    )
+
+    from agent.expression.synapses import chat, ModelGroup
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _build_profile_system_prompt()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=2000,
+            temperature=0.2,
+            model_group=ModelGroup.LIGHTWEIGHT,
+        )
+    except Exception as e:
+        logger.error(f"[profile_consolidation] LLM call failed: {e}")
+        return metrics
+
+    content = response.get("content", "").strip()
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        logger.error(f"[profile_consolidation] no JSON in LLM response: {content[:500]}")
+        return metrics
+
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        logger.error(f"[profile_consolidation] JSON parse error: {e} | raw: {content[:500]}")
+        return metrics
+
+    persons_decisions = data.get("persons", [])
+    if not isinstance(persons_decisions, list):
+        logger.error("[profile_consolidation] 'persons' is not a list")
+        return metrics
+
+    for d in persons_decisions:
+        pid = d.get("person_id")
+        if not pid or pid == "jose":
+            continue
+        kp = social.get_known_person(pid)
+        if not kp:
+            metrics["skipped"] += 1
+            continue
+        metrics["persons_evaluated"] += 1
+
+        # New aliases — dedupe locally against current state before calling.
+        existing_aliases = json.loads(kp.get("aliases_json") or "[]")
+        existing_norms = {a.get("norm") for a in existing_aliases if a.get("norm")}
+        for alias in d.get("new_aliases") or []:
+            value = alias.get("value")
+            alias_type = alias.get("alias_type", "alias")
+            if not value or not isinstance(value, str):
+                continue
+            if alias_type not in _VALID_ALIAS_TYPES:
+                alias_type = "alias"
+            norm = social.normalize_name(value)
+            if norm in existing_norms:
+                continue
+            try:
+                confidence = float(alias.get("confidence", 0.6))
+            except (TypeError, ValueError):
+                confidence = 0.6
+            confirmed = bool(alias.get("confirmed", False))
+            result = social.add_person_alias(pid, value, alias_type, confirmed, confidence)
+            if result is not None:
+                metrics["aliases_added"] += 1
+                existing_norms.add(norm)
+                logger.info(
+                    f"[profile_consolidation] {pid} +alias={value!r} type={alias_type} confirmed={confirmed}"
+                )
+
+        # Name correction — only if both fields provided and differ from current.
+        nc = d.get("name_correction")
+        if nc and isinstance(nc, dict):
+            new_display = nc.get("display_name")
+            new_canonical = nc.get("canonical_name")
+            updates = {}
+            if isinstance(new_display, str) and new_display.strip() and new_display != kp.get("display_name"):
+                updates["display_name"] = new_display.strip()
+            if isinstance(new_canonical, str) and new_canonical.strip() and new_canonical != kp.get("canonical_name"):
+                updates["canonical_name"] = new_canonical.strip()
+            if updates:
+                social.update_known_person(pid, **updates)
+                metrics["names_corrected"] += 1
+                logger.info(
+                    f"[profile_consolidation] {pid} name_correction={updates} "
+                    f"reason={nc.get('reason')!r}"
+                )
+
+        # Emotional tone — only if valid value and differs from current.
+        new_tone = d.get("refined_emotional_tone")
+        if new_tone and isinstance(new_tone, str) and new_tone in _VALID_EMOTIONAL_TONES:
+            if new_tone != kp.get("emotional_tone"):
+                social.set_emotional_tone(pid, new_tone)
+                metrics["tones_updated"] += 1
+                logger.info(
+                    f"[profile_consolidation] {pid} tone={kp.get('emotional_tone')!r} -> {new_tone!r}"
+                )
+
+        reason = d.get("reason", "")
+        if reason:
+            logger.info(f"[profile_consolidation] {pid} reason={reason!r}")
+
+    logger.info(
+        f"[profile_consolidation] done: evaluated={metrics['persons_evaluated']} "
+        f"aliases={metrics['aliases_added']} names={metrics['names_corrected']} "
+        f"tones={metrics['tones_updated']} skipped={metrics['skipped']}"
+    )
+    return metrics
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Relations consolidation (nightly step 4)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_RELATIONS_EXTRACTION_PROMPT = """\
+# Tarea: detectar relaciones entre personas (nightly step 4)
+
+Estás revisando lo que pasó hoy y decides qué relaciones nuevas entre personas
+ya conocidas deben registrarse, o qué relaciones existentes deben actualizarse.
+
+## Restricciones críticas
+
+- **Solo emite relaciones entre `person_id`s que YA existen en `known_persons`.**
+  La creación de personas nuevas es trabajo de otro paso (step 1). Si una persona
+  aparece en el texto pero no está en tu lista de `persons`, ignórala.
+- **No re-emitas** relaciones que ya están en `current_relations` de la persona,
+  salvo que la nueva evidencia justifique cambiar `relation_type`, `description`
+  o subir el `status` de `inferred` a `confirmed`.
+
+## Lo que recibes
+
+En el mensaje del usuario:
+
+1. `now_utc` — timestamp del momento actual.
+2. `persons` — lista de personas afectadas en la ventana. Cada una trae:
+   - `person_id`, `display_name`, `current_state`
+   - `current_relations` — lista de relaciones ya registradas (desde y hacia la persona); cada item tiene `from_person_id`, `to_person_id`, `relation_type`, `relation_label`, `status`, `description`.
+   - `sessions` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con todos los turnos de las sesiones donde aparece la persona.
+   - `mentions` — lista de menciones de esa persona en la ventana.
+
+## Tu tarea
+
+Detectar relaciones explícitas o fuertemente inferibles del texto.
+
+### Vocabulario
+
+- `relation_type` ∈ `family | romantic | friendship | professional | social | conflict | identity | unknown`
+- `relation_label` — texto libre descriptivo, snake_case si es posible: `mother_of`, `brother_of`, `colleague_of`, `friend_since_college`, `boss_of`, `partner_of`, etc. **Direccional**: si A es madre de B, `from=A`, `to=B`, `label=mother_of`.
+- `status` ∈ `confirmed | inferred | disputed | rejected | stale | unknown`
+  - `confirmed`: la relación se enuncia explícita en el texto ("Gloria es mi mamá").
+  - `inferred`: deducción razonable pero no explícita ("vamos a casa de mi suegra" + relación previa "Marta is mother_of esposa de Jose").
+
+### Cuándo emitir
+
+- Relación nueva no presente en `current_relations` → emitir.
+- Relación existente con `status='inferred'` que ahora aparece explícita en texto → emitir con `status='confirmed'` (el upsert la actualiza).
+- Relación existente sin cambios → NO emitir.
+
+## Formato de salida
+
+JSON estricto. Nada antes, nada después.
+
+```
+{
+  "relations": [
+    {
+      "from_person_id": "gloria1",
+      "to_person_id": "jose",
+      "relation_type": "family",
+      "relation_label": "mother_of",
+      "description": "Gloria es la madre de Jose, mencionado explícitamente.",
+      "status": "confirmed",
+      "confidence": 0.95,
+      "reason": "Jose dijo 'mi mamá Gloria' en sesión X."
+    }
+  ]
+}
+```
+
+Si no hay relaciones nuevas o cambios, devolver `{"relations": []}`.
+
+`reason` siempre en español neutro colombiano, una línea. No inventes
+relaciones sin soporte en `sessions` o `mentions`.
+"""
+
+_cached_relations_system: str | None = None
+
+
+def _build_relations_system_prompt() -> str:
+    global _cached_relations_system
+    if _cached_relations_system is not None:
+        return _cached_relations_system
+    parts = []
+    for rel in ("lumi_soul.md", "principles/relation_policy.md"):
+        fp = _IDENTITY_DIR / rel
+        if fp.exists():
+            parts.append(fp.read_text(encoding="utf-8"))
+    parts.append(_RELATIONS_EXTRACTION_PROMPT)
+    _cached_relations_system = "\n\n---\n\n".join(parts)
+    return _cached_relations_system
+
+
+_VALID_RELATION_TYPES = {
+    "family", "romantic", "friendship", "professional",
+    "social", "conflict", "identity", "unknown",
+}
+_VALID_RELATION_STATUSES = {
+    "confirmed", "inferred", "disputed", "rejected", "stale", "unknown",
+}
+
+
+async def update_relations(period_start: datetime | None = None) -> dict:
+    """Nightly step 4: detect new relations between known persons from the
+    window's sessions, then run `infer_family_relations()` for rule-based
+    derivations.
+
+    Only emits relations between person_ids that already exist in
+    `known_persons` (creation is step 1's job). Idempotent via the UNIQUE
+    upsert in add_relation.
+
+    Recovery via heartbeat_state: when period_start is None, defaults to last
+    24h. A failed prior run extends tonight's window automatically.
+    """
+    from agent.memory.mindstream import social
+
+    metrics = {
+        "persons_evaluated": 0,
+        "relations_added": 0,
+        "relations_inferred": 0,
+        "skipped": 0,
+    }
+
+    if period_start is None:
+        period_start = datetime.now(UTC) - timedelta(hours=24)
+    logger.info(f"[relations_consolidation] window starts at {period_start.isoformat()}")
+
+    payload_persons, _ = _build_per_person_context(period_start, include_relations=True)
+    if not payload_persons:
+        logger.info("[relations_consolidation] no consolidated mentions in window")
+        # Still run inference — it may pick up relations from prior days.
+        try:
+            inferred = social.infer_family_relations()
+            metrics["relations_inferred"] = len(inferred) if inferred else 0
+        except Exception as e:
+            logger.error(f"[relations_consolidation] infer_family_relations failed: {e}")
+        return metrics
+
+    payload = {
+        "now_utc": datetime.now(UTC).isoformat(),
+        "persons": payload_persons,
+    }
+
+    logger.info(
+        f"[relations_consolidation] sending to LLM: persons={len(payload_persons)}"
+    )
+
+    from agent.expression.synapses import chat, ModelGroup
+    try:
+        response = await chat(
+            messages=[
+                {"role": "system", "content": _build_relations_system_prompt()},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+            max_tokens=2000,
+            temperature=0.2,
+            model_group=ModelGroup.LIGHTWEIGHT,
+        )
+    except Exception as e:
+        logger.error(f"[relations_consolidation] LLM call failed: {e}")
+        return metrics
+
+    content = response.get("content", "").strip()
+    match = re.search(r"\{.*\}", content, re.DOTALL)
+    if not match:
+        logger.error(f"[relations_consolidation] no JSON in LLM response: {content[:500]}")
+        return metrics
+
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError as e:
+        logger.error(f"[relations_consolidation] JSON parse error: {e} | raw: {content[:500]}")
+        return metrics
+
+    relations_decisions = data.get("relations", [])
+    if not isinstance(relations_decisions, list):
+        logger.error("[relations_consolidation] 'relations' is not a list")
+        return metrics
+
+    metrics["persons_evaluated"] = len(payload_persons)
+
+    for r in relations_decisions:
+        from_id = r.get("from_person_id")
+        to_id = r.get("to_person_id")
+        rtype = r.get("relation_type", "unknown")
+        label = r.get("relation_label")
+        description = r.get("description", "")
+        status = r.get("status", "confirmed")
+        try:
+            confidence = float(r.get("confidence", 1.0))
+        except (TypeError, ValueError):
+            confidence = 1.0
+
+        if not from_id or not to_id or from_id == to_id:
+            metrics["skipped"] += 1
+            continue
+        if rtype not in _VALID_RELATION_TYPES:
+            rtype = "unknown"
+        if status not in _VALID_RELATION_STATUSES:
+            status = "confirmed"
+
+        # Both persons must exist in known_persons.
+        if not social.get_known_person(from_id) or not social.get_known_person(to_id):
+            logger.warning(
+                f"[relations_consolidation] skip {from_id}->{to_id}: unknown person_id"
+            )
+            metrics["skipped"] += 1
+            continue
+
+        # Detect novelty: check if this relation already exists with same label.
+        existing = social.get_relation_between(from_id, to_id) if label is None else None
+        was_new = existing is None
+        if label is not None:
+            # get_relation_between checks any label; for label-specific dedup,
+            # rely on add_relation's UNIQUE upsert and detect novelty via
+            # mention_count returned.
+            pass
+
+        result = social.add_relation(
+            from_id, to_id, rtype, description,
+            relation_label=label, status=status, confidence=confidence,
+        )
+        if result is None:
+            metrics["skipped"] += 1
+            continue
+
+        # add_relation's upsert increments mention_count on conflict; a fresh
+        # insert leaves mention_count=1. Use that as the novelty signal.
+        if result.get("mention_count") == 1:
+            metrics["relations_added"] += 1
+            logger.info(
+                f"[relations_consolidation] +relation {from_id} -[{result.get('relation_label')}]-> {to_id} "
+                f"type={rtype} status={status}"
+            )
+        else:
+            logger.info(
+                f"[relations_consolidation] ~relation {from_id} -[{result.get('relation_label')}]-> {to_id} "
+                f"upsert (mention_count={result.get('mention_count')})"
+            )
+
+        reason = r.get("reason", "")
+        if reason:
+            logger.info(f"[relations_consolidation] reason={reason!r}")
+
+    # Run rule-based inference once at the end (operates on the full graph).
+    try:
+        inferred = social.infer_family_relations()
+        metrics["relations_inferred"] = len(inferred) if inferred else 0
+        if inferred:
+            logger.info(
+                f"[relations_consolidation] infer_family_relations produced {len(inferred)} new relations"
+            )
+    except Exception as e:
+        logger.error(f"[relations_consolidation] infer_family_relations failed: {e}")
+
+    logger.info(
+        f"[relations_consolidation] done: evaluated={metrics['persons_evaluated']} "
+        f"added={metrics['relations_added']} inferred={metrics['relations_inferred']} "
+        f"skipped={metrics['skipped']}"
+    )
+    return metrics

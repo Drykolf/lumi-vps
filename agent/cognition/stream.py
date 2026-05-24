@@ -34,6 +34,7 @@ Reglas:
 - Incluye nombres propios, apodos y nombres compuestos.
 - Incluye referencias sin nombre cuando indiquen una persona por relación con el usuario: "mi mamá", "mi papá", "mi jefe", "mi hermana", "mi novia", "mi amigo", "mi socio", etc.
 - Incluye varias personas si aparecen en el mismo mensaje.
+- CRÍTICO: Crea una entrada separada por cada persona individual. Si se mencionan múltiples personas en una lista ("sofia, gloria, andres, y pablo"), crea un objeto distinto por cada nombre — nunca los agrupes en un solo objeto.
 - No inventes nombres.
 - No resuelvas quién es la persona en la base de datos.
 - No asumas que dos personas con el mismo nombre son la misma persona.

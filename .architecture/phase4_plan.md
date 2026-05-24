@@ -1,19 +1,19 @@
 # LUMI VPS — Phase 4 Unified Plan
 
-**Last updated:** May 24, 2026 (Block 6 shipped)
+**Last updated:** May 24, 2026 (Block 5b steps 3+4 shipped)
 **Source:** Merged from 3 sources:
 - `.architecture/plan.md` (original Phase 4 plan)
 - `.architecture/phase4_known_persons_read_path_plan.md` (Phase 4A — schema migration + social read-path)
 - Full codebase audit of `agent/` (45 Python files)
 
 **Active phase:** 4 (Mem0 + semantic memory — social features)
-**Next target:** Block 5 remaining subs (update_profiles, update_relations, consolidate_daily_memories, cleanup_memory_tiers, analyze_daily_tasks) + weekly decay wiring
+**Next target:** Block 5 remaining subs (`consolidate_daily_memories` step 5, `analyze_daily_tasks` step 7); `cleanup_memory_tiers` moved to weekly cycle (forgetting.py)
 
 **Status:**
 - **Block 1** (read-path) shipped May 21, 2026 — per-turn third-party entity resolution + injection is live.
 - **Block 2** (interest deltas) shipped May 21, 2026 — **redesigned to nightly batch** (Option 1, see decision below). `consolidate_person_interest` lives in quiescence as step 2.
 - **Block 4** (emotional honesty mode injection) **verified shipped** — implemented in `working_memory.py:210-218`.
-- **Block 5** (nightly stubs) — 2 of 6 subs wired (`consolidate_entity_mentions`, `consolidate_person_interest`); 4 still stubbed (`update_profiles`, `update_relations`, `consolidate_daily_memories`, `cleanup_memory_tiers`, `analyze_daily_tasks`); weekly decay wired (**5a shipped 2026-05-23**).
+- **Block 5** (nightly stubs) — **5 of 7 subs wired** (`consolidate_entity_mentions`, `consolidate_person_interest`, `update_profiles`, `update_relations`, `extract_daily_learnings`); 2 still stubbed (`consolidate_daily_memories`, `analyze_daily_tasks`); `cleanup_memory_tiers` **moved to weekly cycle** (forgetting.py stub); **5a shipped 2026-05-23, 5b steps 3+4 shipped 2026-05-24**.
 - **Block 3** (mood eval involved_people) **verified shipped** 2026-05-23 — `_build_involved_people()` in `pulse.py` feeds resolved persons into `evaluate_mood`.
 - **Block 6** (attitude policy dynamic injection) **verified shipped** 2026-05-24 — `_build_posture_hint()` in `working_memory.py` injects `[Postura]` directives based on resolved persons' interest scores.
 
@@ -50,7 +50,7 @@ agent/
 │   └── mindstream/
 │       ├── social.py             → known_persons CRUD, relations, aliases, resolve, add_delta, run_decay, infer_family
 │       ├── mentions.py           → person_mentions table (traces.db)
-│       ├── consolidation.py      → LLM-powered diary entry generation
+│       ├── consolidation.py      → LLM-powered: entity consolidation, interest deltas, update_profiles, update_relations, diary
 │       └── cleanup.py            → periodic DB pruning (history, mood_logs, heartbeat_runs)
 ├── affect/
 │   ├── mood.py                   → Mood CRUD (state, deltas, morning_reset, sleep_stage, honesty_mode)
@@ -63,8 +63,8 @@ agent/
 │   └── routines/
 │       ├── pulse.py               → 15min tick: mood check, idle decay
 │       ├── morning.py             → 7am daily: morning_regression() → wired
-│       ├── quiescence.py          → 3am nightly: 4 of 6 subs stubs, 1 partial (update_user_profiles=pass), 1 wired (extract_daily_learnings)
-│       └── forgetting.py          → Mon 4am: cleanup wired, interest_decay=stub(...)
+│       ├── quiescence.py          → 3am nightly: 7-step orchestration (5 wired, 2 stubs); _run_step isolation + per-step heartbeat bookmarks
+│       └── forgetting.py          → Mon 4am: weekly_decay wired; cleanup_memory_tiers stub (moved from nightly)
 ├── identity/
 │   ├── lumi_soul.md              → Core personality
 │   ├── attitude.md               → Expressive framework
@@ -128,15 +128,17 @@ agent/
 | **interest deltas** | ✅ DONE 2026-05-21 — nightly LLM via `consolidate_person_interest` | `consolidation.py:consolidate_person_interest`, calls `social.py:add_delta` |
 | **entity mention consolidation** | ✅ DONE 2026-05-21 — nightly LLM resolves pending mentions, creates new persons, deletes anonymous | `consolidation.py:consolidate_entity_mentions` |
 | **person mention increments** | ✅ DONE 2026-05-21 — moved from per-turn to nightly via `bump_mention` | `social.py:bump_mention`, called from `consolidate_entity_mentions` |
-| **interest decay** | ❌ `run_decay()` exists, weekly cron stub is `...` | `social.py:874`, `forgetting.py:19` |
+| **interest decay** | ✅ DONE 2026-05-23 — `weekly_interest_decay()` calls `run_decay()` | `social.py:874`, `forgetting.py:weekly_interest_decay` |
 | **relations (read)** | ✅ DONE 2026-05-21 — `get_relations()` called per resolved person | `social.py:303` |
-| **relations (write)** | ❌ `add_relation()` not called in conversation flow; nightly `update_relations` is stub | `social.py:243`, `quiescence.py:update_relations` |
-| **family inference** | ❌ `infer_family_relations()` never triggered; would live in `update_relations` | `social.py:910`, `quiescence.py` |
+| **relations (write)** | ✅ DONE 2026-05-24 — nightly `update_relations` wired; LLM detects new relations, applies via `add_relation()` | `consolidation.py:update_relations`, `quiescence.py:update_relations` |
+| **family inference** | ✅ DONE 2026-05-24 — `infer_family_relations()` called at end of `update_relations` nightly | `social.py:infer_family_relations`, `consolidation.py:update_relations` |
+| **profile extraction (identity)** | ✅ DONE 2026-05-24 — nightly `update_profiles` extracts new aliases, name corrections, emotional_tone | `consolidation.py:update_profiles`, `quiescence.py:update_profiles` |
 | **involved people in mood eval** | ✅ DONE 2026-05-23 — `_build_involved_people()` feeds resolved persons into `evaluate_mood` | `pulse.py:_build_involved_people`, `evaluation.py:_build_eval_context` |
 | **emotional honesty mode** | ✅ DONE — implemented in working_memory dynamic suffix | `working_memory.py:210-218` |
-| **nightly quiescence** | 🟡 2 of 6 subs wired (entity_mentions, person_interest); 4 still stubs | `quiescence.py` |
-| **weekly interest decay** | ✅ DONE 2026-05-23 — `weekly_interest_decay()` calls `run_decay()` | `social.py:942`, `forgetting.py:19` |
+| **nightly quiescence** | 🟡 5 of 7 subs wired (entity_mentions, person_interest, update_profiles, update_relations, extract_daily_learnings); 2 still stubs (consolidate_daily_memories, analyze_daily_tasks) | `quiescence.py` |
+| **weekly interest decay** | ✅ DONE 2026-05-23 — `weekly_decay()` calls `weekly_interest_decay()` → `run_decay()` | `social.py:run_decay`, `forgetting.py:weekly_decay` |
 | **attitude policy injection** | ✅ DONE 2026-05-24 — `_build_posture_hint()` injects `[Postura]` per resolved person interest score | `working_memory.py:_build_posture_hint` |
+| **per-step heartbeat bookmarks** | ✅ DONE 2026-05-24 — each quiescence sub-step has its own `heartbeat_state` row; `get_last_success()` provides period_start for self-healing recovery | `rhythm/state.py:get_last_success`, `seeds/initial_state.sql` |
 
 ---
 
@@ -226,12 +228,14 @@ was retired; deltas are now computed once per night by an LLM consolidator
 that reviews the full day's mentions, transcripts, and emotional context per
 person, then applies a calibrated delta via `add_delta()`.
 
-**Implementation:** `consolidate_person_interest(affected_person_ids)` in
+**Implementation:** `consolidate_person_interest(period_start: datetime | None)` in
 [agent/memory/mindstream/consolidation.py](../agent/memory/mindstream/consolidation.py).
-Receives the set of person_ids touched by `consolidate_entity_mentions` (step
-1), groups their consolidated mentions, builds an LLM payload (current score,
-emotional_tone, today's mention summaries, turn excerpts, relations, mood
-snapshots), and asks the LLM to propose `{person_id, delta, new_emotional_tone?, reason}`.
+Reads consolidated mentions since `period_start` (defaulting to `now - 24h`),
+groups by person, builds an LLM payload (current score, emotional_tone, today's
+mention summaries, session transcripts, relations, mood snapshots), and asks the
+LLM to propose `{person_id, delta, new_emotional_tone?, reason}`. Signature was
+changed from `affected_person_ids: set[str]` to `period_start`-based for
+self-healing recovery (missed nights auto-extend the window).
 
 **Jose is excluded** — his floor 0.70 is preserved by `add_delta`'s built-in
 cap, and the consolidator skips him to avoid LLM noise.
@@ -285,26 +289,45 @@ manages the flip; this block consumes it.
 
 ### Block 5 — Wire Stubs to Real Code 🟡 PARTIAL
 
-#### 5a — Weekly interest decay (`forgetting.py:19`) ✅ SHIPPED 2026-05-23
+#### 5a — Weekly interest decay ✅ SHIPPED 2026-05-23
 
-`weekly_interest_decay()` now calls `run_decay()` from `agent.memory`.
-`decay_inactive_people()` and `forget_stale_people()` remain stubs — not called from scheduler; reserved for `cleanup_memory_tiers` (step 7) in a future sub-block.
+`weekly_decay()` (renamed from `weekly_forgetting`) calls `weekly_interest_decay()` → `run_decay()` from `agent.memory`, then `cleanup_old_logs()`. `decay_inactive_people()` and `forget_stale_people()` stubs were removed; `cleanup_memory_tiers` is the canonical stub for future threshold-based cleanup (see 5b above).
 
-#### 5b — Nightly quiescence — new orchestration order
+#### 5b — Nightly quiescence — orchestration order (7 steps)
 
 The nightly `nightly_quiescence()` runs these subs in order (see
-[quiescence.py](../agent/rhythm/routines/quiescence.py)):
+[quiescence.py](../agent/rhythm/routines/quiescence.py)). Each step runs
+inside `_run_step()` which isolates failures (exceptions caught, logged,
+never re-raised) and updates its own `heartbeat_state` bookmark on success.
+`get_last_success(task_name)` reads that bookmark to provide `period_start`
+for self-healing window recovery: if a step fails, tomorrow's run stretches
+its window back to cover missed nights automatically.
 
 | # | Sub-function | What it does | Status |
 |---|--------------|-------------|--------|
 | 1 | `consolidate_entity_mentions()` | LLM resolves all pending mentions, creates new persons (with slug person_id), deletes anonymous mentions, bumps mention_count/last_mentioned | ✅ WIRED 2026-05-21 |
-| 2 | `consolidate_person_interest(affected_ids)` | LLM evaluates per-person deltas based on day's mentions + transcripts, applies via `add_delta` | ✅ WIRED 2026-05-21 |
-| 3 | `update_profiles(affected_ids)` | Extract new facts (notes, aliases, tone refinements) from today's turns and update known_persons | ❌ stub |
-| 4 | `update_relations(affected_ids)` | Detect new relation patterns + apply `infer_family_relations()` | ❌ stub |
-| 5 | `consolidate_daily_memories()` | Extract atomic facts per person from today's turns → Mem0 via `add_memory()` | ❌ stub |
-| 6 | `extract_daily_learnings()` | Generate diary entries via `generate_daily_diary()` | ✅ WIRED |
-| 7 | `cleanup_memory_tiers()` | Apply `run_decay()`, downgrade Mem0 for threshold-crossing persons, delete `status='forgotten'` after grace period | ❌ stub |
-| 8 | `analyze_daily_tasks()` | Detect pending tasks mentioned → store in `skill_proposals` | ❌ stub |
+| 2 | `consolidate_person_interest(period_start)` | LLM evaluates per-person deltas based on window's consolidated mentions + session transcripts; applies via `add_delta` | ✅ WIRED 2026-05-21 |
+| 3 | `update_profiles(period_start)` | **Identity-only**: LLM extracts new aliases, name corrections, refined emotional_tone from session transcripts where each person appeared; NO biographical facts | ✅ WIRED 2026-05-24 |
+| 4 | `update_relations(period_start)` | LLM detects new relations between known persons; applies via `add_relation()`; calls `infer_family_relations()` once at end | ✅ WIRED 2026-05-24 |
+| 5 | `consolidate_daily_memories()` | Extract atomic facts per person from today's turns → Mem0 via `add_memory()` | ❌ stub — deferred (Mem0 metadata pipeline needs separate session) |
+| 6 | `extract_daily_learnings()` | Generate diary entries via `generate_daily_diary()`; self-healing via `MAX(period_end) FROM diary` | ✅ WIRED |
+| 7 | `analyze_daily_tasks()` | Detect pending tasks mentioned → store in `skill_proposals` | ❌ stub |
+
+**`cleanup_memory_tiers` — moved to weekly cycle:** Threshold-based cleanup
+(interest_score ≤ 0.05 AND last_mentioned ≥ 30d → `status='forgotten'`;
+grace-period deletion after 30d more; Mem0 hard-delete by `metadata.person_id`)
+doesn't benefit from nightly evaluation. Lives as a documented stub in
+`forgetting.py` for future wiring in the weekly job.
+
+**Shared infrastructure (shipped 2026-05-24):**
+- `_run_step(log, name, coro_factory, expected_keys)` — isolation wrapper in `quiescence.py`
+- `get_last_success(task_name) -> datetime | None` — heartbeat bookmark reader in `rhythm/state.py`
+- `_build_per_person_context(period_start, include_relations)` — shared payload builder in `consolidation.py`: loads consolidated mentions via `get_consolidated_since_grouped_by_person`, loads session transcripts via `get_history_grouped_by_session` + `_slim_transcript`, filters to sessions where each person appeared
+- `get_consolidated_since_grouped_by_person(period_start)` — new query in `mentions.py`
+
+**Schema change (2026-05-24):** `known_persons.forgotten_at DATETIME` column added to `002_create_core.sql` — future `cleanup_memory_tiers` will use this for grace-period tracking.
+
+**Seed change (2026-05-24):** `initial_state.sql` corrected from `daily_maintenance` → `nightly_quiescence`; 7 per-step `heartbeat_state` seeds added. `start_rhythm_run()` now does `INSERT OR IGNORE` so new task_names auto-register.
 
 **Justification of order:**
 - Mentions first — everything else needs resolved `person_id`s.
@@ -312,14 +335,16 @@ The nightly `nightly_quiescence()` runs these subs in order (see
 - Profile/Relations third-fourth — operate on the stabilized roster.
 - Mem0 fifth — long-term store, after the roster + scores are final.
 - Diary sixth — narrative retrospective, reads everything above.
-- Cleanup seventh — destructive, runs last.
-- Tasks eighth — independent.
+- Tasks seventh — independent.
 
-**Files touched:** `agent/rhythm/routines/forgetting.py`, `agent/rhythm/routines/quiescence.py`
+**Files touched:** `agent/rhythm/routines/quiescence.py`, `agent/rhythm/routines/forgetting.py`, `agent/rhythm/state.py`, `agent/memory/mindstream/consolidation.py`, `agent/memory/mindstream/mentions.py`, `agent/memory/__init__.py`, `agent/subconscious/migrations/002_create_core.sql`, `agent/subconscious/seeds/initial_state.sql`
 
 **Removed/migrated:**
-- `update_relationship_memory()` — split into `update_profiles` + `update_relations`. Kept as no-op shim for backwards compat.
+- `update_relationship_memory()` — split into `update_profiles` + `update_relations`. No-op shim retained.
 - `update_user_profiles()` — no-op (table removed).
+- `cleanup_memory_tiers` — removed from nightly; stub added to `forgetting.py`.
+- `weekly_forgetting` → renamed to `weekly_decay` (function + rhythm_task name).
+- `decay_inactive_people()`, `forget_stale_people()` — removed stubs from `forgetting.py`.
 
 ---
 
@@ -362,21 +387,25 @@ Session 3: Block 2 (redesigned) + Block 5 partial ✅ SHIPPED 2026-05-21
            → Removed per-turn increment_person_mention (moved to nightly)
            → Updated interest_policy.md to nightly-batch design
 
-Session 4 (next): Block 5 remaining
-           → update_profiles (step 3)
-           → update_relations (step 4) + infer_family_relations
+Session 4: Block 5b steps 3+4 ✅ SHIPPED 2026-05-24
+           → update_profiles (step 3) — identity-only: aliases, name corrections, emotional_tone
+           → update_relations (step 4) + infer_family_relations()
+           → _run_step isolation + per-step heartbeat bookmarks
+           → get_last_success() + get_consolidated_since_grouped_by_person()
+           → cleanup_memory_tiers moved to weekly cycle (forgetting.py stub)
+           → weekly_forgetting → weekly_decay rename
+
+Session 5 (next): Block 5 remaining
            → consolidate_daily_memories (step 5) → add_memory() to Mem0
-           → cleanup_memory_tiers (step 7) → decay + downgrade + forgotten
-           → analyze_daily_tasks (step 8) → skill_proposals
-           → weekly_interest_decay → run_decay() wire
+             (needs: Mem0 metadata pipeline, custom instructions, dedup strategy)
+           → analyze_daily_tasks (step 7) → skill_proposals table
+           → cleanup_memory_tiers wiring in weekly cycle (weekly_decay)
 
-Session 5 (later): Block 3 — Mood eval involved_people
-           → Build dict from get_unmood_evaluated turns
-           → Fix "# TODO" in _build_eval_context()
+Session 6 (later): Block 3 — ✅ SHIPPED 2026-05-23
 
-Session 6 (later): Block 6 — Attitude policy posture injection
+Session 7 (later): Block 6 — ✅ SHIPPED 2026-05-24
 
-Session 7 (later): Validate end-to-end
+Session 8 (later): Validate end-to-end
            → Mention a third party → nightly resolves/creates → interest
              evolves → diary references it → weekly decay cleans up inactives
 ```
@@ -406,24 +435,30 @@ After these sessions, Phase 4 is complete:
 | `agent/memory/mindstream/social.py:874` | `run_decay()` — 28-day decay | B5 |
 | `agent/memory/mindstream/social.py:910` | `infer_family_relations()` — 4 inference rules | B5 (update_relations) |
 | `agent/memory/mindstream/consolidation.py:consolidate_entity_mentions` | Nightly step 1 — LLM resolves pending mentions | B2/B5 ✅ |
-| `agent/memory/mindstream/consolidation.py:consolidate_person_interest` | Nightly step 2 — LLM evaluates deltas | B2 ✅ |
+| `agent/memory/mindstream/consolidation.py:consolidate_person_interest` | Nightly step 2 — LLM evaluates deltas (period_start-based window) | B2 ✅ |
+| `agent/memory/mindstream/consolidation.py:update_profiles` | Nightly step 3 — LLM extracts aliases, name corrections, emotional_tone | B5 ✅ 2026-05-24 |
+| `agent/memory/mindstream/consolidation.py:update_relations` | Nightly step 4 — LLM detects new relations; runs `infer_family_relations()` | B5 ✅ 2026-05-24 |
+| `agent/memory/mindstream/consolidation.py:_build_per_person_context` | Shared payload builder for steps 3+4: consolidated mentions + session transcripts filtered per person | B5 ✅ |
 | `agent/memory/mindstream/mentions.py:12` | `add_mention()` — persist raw entities | B1 ✅ |
 | `agent/memory/mindstream/mentions.py:get_pending` | Fetch all pending for nightly | B2 ✅ |
+| `agent/memory/mindstream/mentions.py:get_consolidated_since_grouped_by_person` | Window-based consolidated mentions grouped by person_id | B5 ✅ 2026-05-24 |
 | `agent/memory/semantic.py:26` | `add_memory()` — Mem0 fact extraction (called from `consolidate_daily_memories` once wired) | B5 pending |
 | `agent/memory/semantic.py:75` | `search_person_relevant()` — scoped Mem0 search | B1 |
-| `agent/affect/evaluation.py:190` | `_build_eval_context()` — `"# TODO"` on line 211 | B3 |
-| `agent/affect/evaluation.py:238` | `evaluate_mood()` — accepts `involved_people` | B3 |
+| `agent/affect/evaluation.py:190` | `_build_eval_context()` — wired with `involved_people` block | B3 ✅ |
+| `agent/affect/evaluation.py:238` | `evaluate_mood()` — accepts `involved_people` | B3 ✅ |
 | `agent/affect/mood.py:207` | `check_emotional_honesty_mode()` — sets flag | B4 |
-| `agent/rhythm/routines/pulse.py:26` | `mood_check()` — passes `None` for involved_people | B3 |
+| `agent/rhythm/routines/pulse.py:26` | `mood_check()` — passes `involved_people` from `_build_involved_people()` | B3 ✅ |
 | `agent/rhythm/routines/quiescence.py:consolidate_entity_mentions` | Step 1 — WIRED to consolidation.py impl | B2/B5 ✅ |
 | `agent/rhythm/routines/quiescence.py:consolidate_person_interest` | Step 2 — WIRED to consolidation.py impl | B2 ✅ |
-| `agent/rhythm/routines/quiescence.py:update_profiles` | Step 3 — stub `...` | B5 pending |
-| `agent/rhythm/routines/quiescence.py:update_relations` | Step 4 — stub `...` | B5 pending |
-| `agent/rhythm/routines/quiescence.py:consolidate_daily_memories` | Step 5 — stub `...` | B5 pending |
+| `agent/rhythm/routines/quiescence.py:update_profiles` | Step 3 — WIRED 2026-05-24 | B5 ✅ |
+| `agent/rhythm/routines/quiescence.py:update_relations` | Step 4 — WIRED 2026-05-24 | B5 ✅ |
+| `agent/rhythm/routines/quiescence.py:consolidate_daily_memories` | Step 5 — stub (Mem0 pipeline deferred) | B5 pending |
 | `agent/rhythm/routines/quiescence.py:extract_daily_learnings` | Step 6 — WIRED | B5 ✅ |
-| `agent/rhythm/routines/quiescence.py:cleanup_memory_tiers` | Step 7 — stub `...` | B5 pending |
-| `agent/rhythm/routines/quiescence.py:analyze_daily_tasks` | Step 8 — stub `...` | B5 pending |
-| `agent/rhythm/routines/forgetting.py:19` | `weekly_interest_decay()` — wired to `run_decay()` | B5a ✅ |
+| `agent/rhythm/routines/quiescence.py:analyze_daily_tasks` | Step 7 — stub | B5 pending |
+| `agent/rhythm/routines/quiescence.py:_run_step` | Isolation wrapper — catches failures, logs NightlyLog, stamps bookmark | B5 ✅ 2026-05-24 |
+| `agent/rhythm/state.py:get_last_success` | Read last_success_at from heartbeat_state as period_start | B5 ✅ 2026-05-24 |
+| `agent/rhythm/routines/forgetting.py:weekly_decay` | `weekly_decay()` → `weekly_interest_decay()` + `cleanup_old_logs()` | B5a ✅ |
+| `agent/rhythm/routines/forgetting.py:cleanup_memory_tiers` | Stub — grace-period deletion + Mem0 hard-delete; NOT called from weekly_decay yet | B5 future |
 | `agent/identity/principles/interest_policy.md` | Updated to nightly-batch design | B2 ✅ |
 | `agent/identity/principles/memory_search.md` | 5-step search pipeline spec | B1 design |
 

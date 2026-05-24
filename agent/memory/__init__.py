@@ -73,6 +73,8 @@ from agent.memory.mindstream.consolidation import (
     generate_daily_diary,
     consolidate_entity_mentions,
     consolidate_person_interest,
+    update_profiles,
+    update_relations,
 )
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
@@ -85,6 +87,7 @@ from agent.memory.mindstream.mentions import (
     update_consolidation_status,
     delete_mention,
     get_consolidated_grouped_by_person,
+    get_consolidated_since_grouped_by_person,
     get_resolved_mentions_by_history_ids,
 )
 
@@ -139,6 +142,8 @@ __all__ = [
     "generate_daily_diary",
     "consolidate_entity_mentions",
     "consolidate_person_interest",
+    "update_profiles",
+    "update_relations",
     "cleanup_history",
     "cleanup_mood_logs",
     "cleanup_heartbeat_runs",
@@ -152,6 +157,7 @@ __all__ = [
     "update_consolidation_status",
     "delete_mention",
     "get_consolidated_grouped_by_person",
+    "get_consolidated_since_grouped_by_person",
     "get_resolved_mentions_by_history_ids",
     "add_mood_log",
     "write_diary_entry",

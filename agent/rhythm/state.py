@@ -76,7 +76,11 @@ async def rhythm_due_weekly(task_name: str, day_of_week: int,
 # ── Run tracking ─────────────────────────────────────────────────────────────
 
 async def start_rhythm_run(task_name: str) -> int:
-    """Insert a heartbeat_runs row and update heartbeat_state. Returns run_id."""
+    """Insert a heartbeat_runs row and update heartbeat_state. Returns run_id.
+
+    Auto-registers new task_names via INSERT OR IGNORE, so callers can use any
+    name without seeding heartbeat_state explicitly.
+    """
     now = datetime.now(UTC).isoformat()
     conn = traces.get_conn()
     cursor = conn.execute(
@@ -89,6 +93,10 @@ async def start_rhythm_run(task_name: str) -> int:
 
     conn = core.get_conn()
     conn.execute(
+        "INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES (?)",
+        (task_name,),
+    )
+    conn.execute(
         """UPDATE heartbeat_state
            SET last_run_at = ?, status = 'running', run_count = run_count + 1,
                updated_at = datetime('now')
@@ -99,6 +107,24 @@ async def start_rhythm_run(task_name: str) -> int:
     conn.close()
 
     return run_id
+
+
+async def get_last_success(task_name: str) -> datetime | None:
+    """Read the last successful run timestamp for a task. Returns None if the
+    task has never succeeded (no row, or last_success_at is NULL).
+
+    Used by nightly sub-steps to compute their period_start window for
+    self-healing recovery — see quiescence.py."""
+    conn = core.get_conn()
+    row = conn.execute(
+        "SELECT last_success_at FROM heartbeat_state WHERE task_name = ?",
+        (task_name,),
+    ).fetchone()
+    conn.close()
+
+    if not row or not row["last_success_at"]:
+        return None
+    return datetime.fromisoformat(row["last_success_at"])
 
 
 async def mark_rhythm_success(task_name: str, run_id: int,

@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS known_persons (
     last_mentioned DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     mention_count INTEGER NOT NULL DEFAULT 1,
 
+    -- Nightly step 7 (cleanup_memory_tiers): anchor for grace-period deletion
+    -- of persons whose status flipped to 'forgotten'. Set when status changes.
+    forgotten_at DATETIME,
+
     notes TEXT,
 
     CHECK (interest_score >= -1.0 AND interest_score <= 1.0),

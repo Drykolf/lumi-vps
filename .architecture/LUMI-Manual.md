@@ -2,9 +2,11 @@
 
 **Proyecto:** LUMI (Listening Unified Memory Intelligence)
 **Autor del proyecto:** Jose Barco
-**Versión del manual:** 2.4
-**Fecha:** 23 de mayo 2026
+**Versión del manual:** 2.5
+**Fecha:** 24 de mayo 2026
 **Generado por:** Claude Code (actualización de arquitectura)
+
+> **Nota de versión (v2.5):** sincronización con codebase a 24 de mayo 2026. Cambios: (1) quiescencia nocturna actualizada de 8 pasos a **7 pasos** (cleanup_memory_tiers movido al ciclo semanal); (2) **5 de 7 pasos ahora wired** — `update_profiles` (step 3) y `update_relations` (step 4) implementados en `consolidation.py` y orquestados desde `quiescence.py`; (3) infraestructura de recuperación automática: `_run_step()` aísla fallos por paso, `get_last_success()` lee bookmark `heartbeat_state` como `period_start` (ventana auto-extensible en fallo); (4) `_build_per_person_context()` — helper compartido pasos 3+4: transcripciones completas de sesiones donde apareció cada persona; (5) `weekly_forgetting` renombrado a `weekly_decay`; (6) schema: columna `known_persons.forgotten_at` añadida; (7) seeds: corregido `daily_maintenance` → `nightly_quiescence`, añadidas 7 filas por-step; (8) firma `consolidate_person_interest` cambiada a `period_start`-based para auto-recovery. Se preserva todo el contenido de v2.4 no afectado por estos cambios.
 
 > **Nota de versión (v2.4):** correcciones puntuales a 23 de mayo 2026. Cambios: (1) `lumi_soul.md` y `attitude.md` reescritos en formato compacto (~118 y ~284 líneas respectivamente) — sección 6.2 actualizada para reflejar contenido real de cada archivo; (2) `Qwen/Qwen3-235B-A22B-Instruct-2507` es el model ID correcto (con sufijo `-Instruct-2507`), su `extra_body` es `{"top_k": 20}` sin `chat_template_kwargs`; (3) `google/gemma-4-26b-a4b` sí acepta `reasoning_effort` como parámetro top-level (no como `extra_body`); (4) estimación del cached prefix ajustada a ~2,200-2,700 tokens; (5) providers `gemma_4_26b_a4b.py` y `qwen3_235b_a22b.py` ahora en el repo y referenciados en `synapses.py`; (6) `.architecture/LUMI_Group_Participation_Policy.md` eliminado — las reglas de grupo fueron absorbidas en `attitude.md`. Se preserva todo el contenido de v2.3 no afectado por estos cambios.
 
@@ -113,7 +115,7 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 │                                     │         │  APScheduler (rhythm/heartbeat.py)              │
 │                                     │         │  ├─ 15min tick: mood check + idle decay        │
 │                                     │         │  ├─ 7am daily: morning mood reset              │
-│                                     │         │  ├─ 3am nightly: 8-step quiescence             │
+│                                     │         │  ├─ 3am nightly: 7-step quiescence (5 wired)   │
 │                                     │         │  └─ Mon 4am: weekly cleanup + decay            │
 │                                     │         │                                                │
 │                                     │         │  Canales adicionales (fase 6+):                │
@@ -189,7 +191,7 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 | Filosofía del agente | **Ultra-ligero** | Loop + contexto + herramientas + memoria en `agent/cognition/` |
 | Personalidad en prompt | **Dos markdown files cacheados** | `get_cached_prefix()` carga `lumi_soul.md` + `attitude.md` |
 | Bases de datos | **data/traces.db + data/core.db** | SQLite: historial conversacional, diario, estado interno, personas, relaciones |
-| Scheduler | **APScheduler** | 4 jobs: 15min tick, 7am morning, 3am nightly (8 pasos), Mon 4am weekly |
+| Scheduler | **APScheduler** | 4 jobs: 15min tick, 7am morning, 3am nightly (7 pasos, 5 wired), Mon 4am weekly |
 
 ---
 
@@ -447,18 +449,18 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 │   │   ├── semantic.py                ← Mem0 REST client (add, search, search_person, save_explicit)
 │   │   └── mindstream/
 │   │       ├── social.py              ← known_persons CRUD, relations, aliases, resolve, deltas, decay
-│   │       ├── mentions.py            ← person_mentions table (per-turn entity tracking)
-│   │       ├── consolidation.py       ← LLM-powered: entity consolidation, interest deltas, diary
+│   │       ├── mentions.py            ← person_mentions table; get_consolidated_since_grouped_by_person
+│   │       ├── consolidation.py       ← LLM-powered: entity consolidation, interest deltas, update_profiles, update_relations, diary
 │   │       └── cleanup.py             ← Periodic DB pruning (history, mood_logs, heartbeat_runs)
 │   ├── rhythm/
 │   │   ├── heartbeat.py               ← APScheduler job registration + start
 │   │   ├── cadence.py                 ← Timing constants (15min, 7am, 3am, Mon 4am)
-│   │   ├── state.py                   ← Execution tracker (heartbeat_state / heartbeat_runs)
+│   │   ├── state.py                   ← Execution tracker (heartbeat_state / heartbeat_runs); get_last_success() for per-step recovery
 │   │   └── routines/
 │   │       ├── pulse.py               ← 15min tick: mood check + idle decay
 │   │       ├── morning.py             ← 7am daily: morning mood regression
-│   │       ├── quiescence.py          ← 3am nightly: 8-step orchestration (2 wired, 6 stubs)
-│   │       └── forgetting.py          ← Mon 4am: cleanup wired, interest_decay stub
+│   │       ├── quiescence.py          ← 3am nightly: 7-step orchestration (5 wired, 2 stubs); _run_step isolation + per-step heartbeat bookmarks
+│   │       └── forgetting.py          ← Mon 4am: weekly_decay wired; cleanup_memory_tiers stub (threshold-based, not nightly)
 │   ├── subconscious/                  ← Singleton database access layer
 │   │   ├── __init__.py                ← traces + core singletons + init_databases()
 │   │   ├── repositories/
@@ -511,8 +513,9 @@ Los siguientes módulos están diseñados en el manual pero **no implementados a
 | `mcp_servers/calendar/` | Fase 5-6 | No implementado |
 | `agent/presence/conduits/discord_adapter.py` | Fase 6 | No implementado |
 | `agent/faculties/clipboard_tool.py` | Fase 4+ | Schema registrado como remote, implementación local pendiente |
-| Quiescencia steps 3-5, 7-8 | Fase 4 (Block 5) | Stubs (`...`) en `agent/rhythm/routines/quiescence.py` |
-| Weekly interest decay | Fase 4 (Block 5) | Stub (`...`) en `agent/rhythm/routines/forgetting.py` |
+| Quiescencia step 5 (`consolidate_daily_memories`) | Fase 4 (Block 5) | Stub — Mem0 metadata pipeline pendiente |
+| Quiescencia step 7 (`analyze_daily_tasks`) | Fase 4 (Block 5) | Stub — `skill_proposals` table pendiente |
+| `cleanup_memory_tiers` (weekly) | Fase 4 (Block 5) | Stub en `forgetting.py` — movido del nightly al weekly cycle |
 | Mem0 fact extraction per turn | Fase 4 | `add_memory()` existe pero no se llama desde el agent loop |
 
 ### 4.2 Filosofía del código
@@ -864,7 +867,7 @@ async def build_messages(user_id, message, metadata, entities_context=None):
 | MVP/Fase 3 | Markdown files cacheados en módulo (`get_cached_prefix()` en `agent/cognition/working_memory.py`) |
 | Fase 3-4 | Estado interno dinámico con 5 campos numéricos + sleep stages + emotional honesty mode |
 | Fase 4 (implementado) | Perfil viviente read-path: entity resolution + scoped Mem0 + injection |
-| Fase 4 (pendiente) | Perfil viviente write-path: update_profiles + update_relations nocturnos |
+| Fase 4 (implementado 2026-05-24) | Perfil viviente write-path: `update_profiles` (aliases, nombre, tono) + `update_relations` + `infer_family_relations()` — nightly steps 3+4 |
 | Fase 5+ | Rúbrica emocional, few-shot examples, passive observations |
 | Fase 10 | **LoRA fine-tuning** con conversaciones reales |
 

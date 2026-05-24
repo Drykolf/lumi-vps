@@ -53,10 +53,23 @@ VALUES (
 ON CONFLICT(key) DO NOTHING;
 
 
--- Seed heartbeat tasks (mandatory rows, status defaults to 'never')
+-- Seed heartbeat tasks (mandatory rows, status defaults to 'never').
+-- Note: start_rhythm_run() also does INSERT OR IGNORE, so new task_names
+-- registered later (e.g. new nightly sub-steps) auto-register on first run.
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('rhythm_tick');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('mood_check');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_morning');
-INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('daily_maintenance');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('nightly_quiescence');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('weekly_decay');
 INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('weekly_cleanup');
+
+-- Per-step bookmarks for nightly_quiescence sub-functions.
+-- Each step reads its own last_success_at as period_start, enabling
+-- self-healing recovery when individual steps fail.
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.consolidate_entity_mentions');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.consolidate_person_interest');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.update_profiles');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.update_relations');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.consolidate_daily_memories');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.extract_daily_learnings');
+INSERT OR IGNORE INTO heartbeat_state (task_name) VALUES ('quiescence.analyze_daily_tasks');

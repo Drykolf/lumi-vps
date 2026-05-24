@@ -198,3 +198,29 @@ def get_consolidated_grouped_by_person(person_ids: set[str]) -> dict[str, list[d
         pid = d["resolved_person_id"]
         grouped.setdefault(pid, []).append(d)
     return grouped
+
+
+def get_consolidated_since_grouped_by_person(
+    period_start: datetime,
+) -> dict[str, list[dict]]:
+    """Return consolidated mentions stamped on/after period_start, grouped by
+    resolved_person_id. Used by nightly step 2 to process only the slice of
+    mentions consolidated since the last successful run — supports self-healing
+    when prior nights' step 2 failed (the window stretches back automatically)."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT * FROM person_mentions
+           WHERE consolidation_status = 'consolidated'
+             AND resolved_person_id IS NOT NULL
+             AND consolidated_at >= ?
+           ORDER BY created_at ASC""",
+        (period_start.isoformat(),),
+    ).fetchall()
+    conn.close()
+
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        d = dict(r)
+        pid = d["resolved_person_id"]
+        grouped.setdefault(pid, []).append(d)
+    return grouped

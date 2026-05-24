@@ -27,7 +27,7 @@ def register_rhythm_jobs() -> None:
     from agent.rhythm.routines.pulse import rhythm_tick
     from agent.rhythm.routines.morning import daily_morning
     from agent.rhythm.routines.quiescence import nightly_quiescence
-    from agent.rhythm.routines.forgetting import weekly_forgetting
+    from agent.rhythm.routines.forgetting import weekly_decay
 
     scheduler.add_job(
         rhythm_tick,
@@ -65,7 +65,7 @@ def register_rhythm_jobs() -> None:
     )
 
     scheduler.add_job(
-        weekly_forgetting,
+        weekly_decay,
         "cron",
         day_of_week=WEEKLY_FORGETTING_DAY,
         hour=WEEKLY_FORGETTING_HOUR,
