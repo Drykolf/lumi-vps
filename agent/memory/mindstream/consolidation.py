@@ -1591,3 +1591,369 @@ async def update_relations(period_start: datetime | None = None) -> dict:
         f"skipped={metrics['skipped']}"
     )
     return metrics
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Daily memories consolidation (nightly step 5) — Mem0 subject-centric (Modelo C)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Pre-extractor: one LIGHTWEIGHT LLM call per known_person above the interest
+# threshold, scoped to that person as the SOLE subject. Each emitted fact is
+# pushed to Mem0 with user_id=person_id, infer=True so Mem0's own extractor
+# normalises and deduplicates against existing memories of the same subject.
+#
+# See memory_policy.md (post-Modelo-C) for interest tiers and storage rules.
+
+_TIER_GUIDANCE = {
+    "max": (
+        "Densidad MÁXIMA (Jose, prioridad afectiva máxima). Extrae TODOS los hechos "
+        "estables útiles para futuras conversaciones: identidad, profesión, "
+        "preferencias, hábitos, planes, contexto técnico, relaciones explícitas, "
+        "metas, gustos, eventos importantes. Sin límite de densidad."
+    ),
+    "high": (
+        "Densidad ALTA (interest_score 0.60-0.69). Extrae identidad completa "
+        "(edad, profesión, ubicación si la sabes), preferencias principales, "
+        "hábitos recurrentes, patrones notables."
+    ),
+    "mid": (
+        "Densidad MEDIA (interest_score 0.40-0.59). Extrae SOLO: profesión o rol, "
+        "y 2-3 hechos concretos especialmente relevantes (skill notable, contexto "
+        "recurrente). Conserva el ruido bajo."
+    ),
+    "negative": (
+        "Densidad NEGATIVA (interest_score < 0). Extrae SOLO razones de conflicto, "
+        "aversión, fricción documentada con Jose o con Lumi. No extraigas hechos "
+        "neutros o positivos — serían ruido a este nivel."
+    ),
+}
+
+
+def _tier_for_person(kp: dict) -> str | None:
+    """Map a known_persons row to a tier key, or None when the person should be skipped.
+    Mirrors memory_policy.md tiers."""
+    if kp["person_id"] == "jose":
+        return "max"
+    score = float(kp.get("interest_score") or 0.0)
+    if score >= 0.60:
+        return "high"
+    if score >= 0.40:
+        return "mid"
+    if score < 0.0:
+        return "negative"
+    return None  # 0.10-0.39 (neutral): per memory_policy, store nothing
+
+
+_DAILY_MEMORIES_PROMPT = """\
+# Tarea: extraer hechos atómicos sobre UN sujeto (nightly step 5)
+
+Estás revisando lo que ocurrió en la ventana del día con UNA persona específica.
+Tu trabajo: extraer hechos atómicos, factuales y estables sobre ESA persona —
+para guardarlos en su memoria semántica de largo plazo (Mem0).
+
+## Sujeto único
+
+**person_id = "{person_id}"** | display_name = "{display_name}" | interest_score = {interest_score}
+
+{tier_guidance}
+
+## Reglas DURAS
+
+1. **El sujeto único de toda memoria es person_id = "{person_id}".** Si una frase es
+   sobre otra persona, IGNÓRALA. Esa persona se procesa en una llamada aparte
+   con su propio `user_id`.
+2. **Atomicidad**: una memoria = un hecho. Si una frase contiene varios hechos
+   atómicos sobre el sujeto, split en varios `fact_es`.
+3. **Atribución**:
+   - `self`: el sujeto lo dijo de sí mismo (turno donde `from == "{person_id}"`).
+     NO agregues atribución al texto.
+   - `hearsay`: una sola fuente externa (otro `from`) lo afirmó. EMBEBE la
+     atribución al final entre paréntesis: `"(según Jose)"`.
+   - `confirmed`: dos o más fuentes externas concuerdan. EMBEBE atribución:
+     `"(Jose y Sebas concuerdan)"`.
+4. **No inventes.** Si no hay evidencia textual clara, NO emitas.
+5. **No incluyas el nombre del sujeto en `fact_es`** (es implícito por el user_id de
+   Mem0). Usa formas impersonales: "Le gusta…", "Prefiere…", "Trabaja en…".
+6. Si nada del periodo merece extracción, devuelve `{{"facts": []}}`.
+
+## Lo que recibes
+
+En el mensaje del usuario:
+1. `now_utc` — timestamp actual.
+2. `subject` — identidad y estado del sujeto (display_name, aliases, emotional_tone, status, relations).
+3. `sessions` — `{{session_id: [{{ts, from, content, history_id}}, ...]}}` con los turnos
+   donde el sujeto aparece (como hablante o mencionado).
+4. `mentions` — menciones explícitas del sujeto en la ventana (`{{created_at, raw_text, session_id, history_id}}`).
+
+## Formato de salida
+
+JSON estricto. Nada antes, nada después. Sin markdown fences.
+
+{{
+  "facts": [
+    {{
+      "fact_es": "Le gusta el chocolate de 80% cacao",
+      "source_role": "self",
+      "source_user_ids": ["{person_id}"],
+      "history_ids": [421]
+    }},
+    {{
+      "fact_es": "Va al gimnasio los miércoles (según Jose)",
+      "source_role": "hearsay",
+      "source_user_ids": ["jose"],
+      "history_ids": [435]
+    }}
+  ]
+}}
+
+`source_role` ∈ `self | hearsay | confirmed`.
+`source_user_ids` = lista de user_ids hablantes que sustentan el hecho.
+`history_ids` = lista de history_ids de los turnos que lo sustentan.
+"""
+
+
+def _build_daily_memories_system_prompt(
+    person_id: str,
+    display_name: str,
+    interest_score: float,
+    tier: str,
+) -> str:
+    """Per-person system prompt. Not cached — each person gets its own template."""
+    return _DAILY_MEMORIES_PROMPT.format(
+        person_id=person_id,
+        display_name=display_name,
+        interest_score=round(float(interest_score or 0.0), 3),
+        tier_guidance=_TIER_GUIDANCE[tier],
+    )
+
+
+def _collect_daily_candidate_person_ids(
+    period_start: datetime,
+    sessions: dict[str, list[dict]],
+    grouped_mentions: dict[str, list[dict]],
+) -> set[str]:
+    """Union of (resolved mentions in window) ∪ (history speakers in window).
+    The window history rows are already loaded into `sessions`."""
+    candidates: set[str] = set()
+    candidates.update(grouped_mentions.keys())
+    for session_rows in sessions.values():
+        for row in session_rows:
+            if row.get("role") == "user":
+                uid = row.get("user_id")
+                if uid:
+                    candidates.add(uid)
+    return candidates
+
+
+def _build_subject_payload(
+    kp: dict,
+    sessions_for_person: dict[str, list[dict]],
+    mention_rows: list[dict],
+) -> dict:
+    """Pack the per-person LLM payload."""
+    from agent.memory.mindstream import social
+
+    aliases = []
+    try:
+        aliases = json.loads(kp.get("aliases_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        aliases = []
+
+    subject = {
+        "person_id": kp["person_id"],
+        "display_name": kp["display_name"],
+        "canonical_name": kp.get("canonical_name"),
+        "aliases": aliases,
+        "emotional_tone": kp.get("emotional_tone"),
+        "status": kp.get("status"),
+        "interest_score": kp.get("interest_score"),
+        "notes": kp.get("notes"),
+        "relations": social.get_relations(kp["person_id"]) or [],
+    }
+
+    mentions_summary = [
+        {
+            "created_at": m["created_at"],
+            "raw_text": m["raw_text"],
+            "session_id": m["session_id"],
+            "history_id": m["history_id"],
+        }
+        for m in mention_rows
+    ]
+
+    return {
+        "now_utc": datetime.now(UTC).isoformat(),
+        "subject": subject,
+        "sessions": sessions_for_person,
+        "mentions": mentions_summary,
+    }
+
+
+async def consolidate_daily_memories(period_start: datetime | None = None) -> dict:
+    """Nightly step 5: per-person LLM extraction of atomic facts → Mem0.
+
+    Subject-centric (Modelo C): one Mem0 call per fact, scoped by
+    user_id=person_id (the subject). Mem0 with infer=True applies its own
+    fact-extractor and deduplicates against existing memories of that subject.
+
+    Candidate set = (persons mentioned & consolidated in window) ∪
+                    (speakers in history during window). Filtered by
+                    interest_score tier (memory_policy.md): scores 0.10-0.39
+                    contribute nothing; Jose always processed at max density.
+
+    Self-healing window: defaults to `now - 24h` when period_start is None.
+    """
+    from agent.memory.mindstream import mentions as mentions_mod
+    from agent.memory.mindstream import social
+    from agent.memory.episodic import get_history_grouped_by_session
+    from agent.memory.semantic import add_memory
+
+    metrics = {
+        "candidates": 0,
+        "persons_evaluated": 0,
+        "persons_skipped_threshold": 0,
+        "persons_skipped_unknown": 0,
+        "facts_extracted": 0,
+        "mem0_calls": 0,
+        "mem0_results": 0,
+    }
+
+    if period_start is None:
+        period_start = datetime.now(UTC) - timedelta(hours=24)
+    now_iso = datetime.now(UTC).isoformat()
+    logger.info(
+        f"[daily_memories] window {period_start.isoformat()} → {now_iso}"
+    )
+
+    grouped_mentions = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
+    raw_sessions = get_history_grouped_by_session(period_start.isoformat(), now_iso)
+
+    candidates = _collect_daily_candidate_person_ids(
+        period_start, raw_sessions, grouped_mentions
+    )
+    metrics["candidates"] = len(candidates)
+    if not candidates:
+        logger.info("[daily_memories] no candidate persons in window")
+        return metrics
+
+    # Slim each session once; reused across persons.
+    slim_sessions = {
+        sid: _slim_transcript(msgs) for sid, msgs in raw_sessions.items()
+    }
+
+    from agent.expression.synapses import chat, ModelGroup
+
+    for pid in sorted(candidates):
+        kp = social.get_known_person(pid)
+        if not kp:
+            metrics["persons_skipped_unknown"] += 1
+            logger.info(f"[daily_memories] skip {pid}: not in known_persons")
+            continue
+
+        tier = _tier_for_person(kp)
+        if tier is None:
+            metrics["persons_skipped_threshold"] += 1
+            logger.info(
+                f"[daily_memories] skip {pid}: interest_score "
+                f"{kp.get('interest_score')} below threshold"
+            )
+            continue
+
+        mention_rows = grouped_mentions.get(pid, [])
+        # Sessions where this person appears = mentioned sessions ∪ spoke sessions.
+        session_ids_for_person: set[str] = {m["session_id"] for m in mention_rows}
+        for sid, msgs in raw_sessions.items():
+            if any(m.get("role") == "user" and m.get("user_id") == pid for m in msgs):
+                session_ids_for_person.add(sid)
+
+        sessions_for_person = {
+            sid: slim_sessions[sid]
+            for sid in session_ids_for_person
+            if sid in slim_sessions
+        }
+
+        if not sessions_for_person and not mention_rows:
+            logger.info(f"[daily_memories] skip {pid}: no sessions/mentions found")
+            continue
+
+        metrics["persons_evaluated"] += 1
+        payload = _build_subject_payload(kp, sessions_for_person, mention_rows)
+        system_prompt = _build_daily_memories_system_prompt(
+            person_id=pid,
+            display_name=kp["display_name"],
+            interest_score=kp.get("interest_score") or 0.0,
+            tier=tier,
+        )
+
+        logger.info(
+            f"[daily_memories] LLM call {pid} | tier={tier} "
+            f"sessions={len(sessions_for_person)} mentions={len(mention_rows)}"
+        )
+
+        try:
+            response = await chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                ],
+                max_tokens=2000,
+                temperature=0.2,
+                model_group=ModelGroup.LIGHTWEIGHT,
+            )
+        except Exception as e:
+            logger.error(f"[daily_memories] LLM call failed for {pid}: {e}")
+            continue
+
+        content = response.get("content", "").strip()
+        match = re.search(r"\{.*\}", content, re.DOTALL)
+        if not match:
+            logger.error(f"[daily_memories] no JSON in LLM response for {pid}: {content[:300]}")
+            continue
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError as e:
+            logger.error(f"[daily_memories] JSON parse error for {pid}: {e} | raw={content[:300]}")
+            continue
+
+        facts = data.get("facts", [])
+        if not isinstance(facts, list):
+            logger.error(f"[daily_memories] facts is not a list for {pid}")
+            continue
+
+        for fact in facts:
+            fact_text = (fact.get("fact_es") or "").strip()
+            if not fact_text:
+                continue
+            metrics["facts_extracted"] += 1
+            metadata = {
+                "source_role": fact.get("source_role"),
+                "source_user_ids": fact.get("source_user_ids") or [],
+                "history_ids": fact.get("history_ids") or [],
+                "period_start": period_start.isoformat(),
+            }
+            try:
+                results = await add_memory(
+                    messages=[{"role": "user", "content": fact_text}],
+                    user_id=pid,
+                    metadata=metadata,
+                    infer=True,
+                )
+            except Exception as e:
+                logger.warning(f"[daily_memories] add_memory failed for {pid}: {e}")
+                continue
+            metrics["mem0_calls"] += 1
+            metrics["mem0_results"] += len(results or [])
+            logger.info(
+                f"[daily_memories] {pid} fact={fact_text!r} "
+                f"source_role={metadata['source_role']} → {len(results or [])} mem0 results"
+            )
+
+    logger.info(
+        f"[daily_memories] done: candidates={metrics['candidates']} "
+        f"evaluated={metrics['persons_evaluated']} "
+        f"skipped_threshold={metrics['persons_skipped_threshold']} "
+        f"skipped_unknown={metrics['persons_skipped_unknown']} "
+        f"facts={metrics['facts_extracted']} "
+        f"mem0_calls={metrics['mem0_calls']} mem0_results={metrics['mem0_results']}"
+    )
+    return metrics

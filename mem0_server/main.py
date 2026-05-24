@@ -80,116 +80,82 @@ DEFAULT_CONFIG = {
         "embedding_dims": EMBEDDING_DIMS,
     }},
     "history_db_path": HISTORY_DB_PATH,
-    "custom_instructions": """Extract memories following these rules:
+    "custom_instructions": """Extract memories following these rules.
 
-        CORE GOAL
-        - Extract only stable, useful, retrievable facts that can help personalize future conversations.
-        - Each memory must be clear when read alone, without needing the original conversation.
-        - Write all memories in Spanish.
+        CORE PRINCIPLE — SUBJECT IS user_id
+        - Every memory you emit is about ONE subject: the `user_id` this call is scoped to.
+        - The `user_id` is the SUBJECT of the fact, not the speaker who said it. The speaker may be someone else mentioning this person.
+        - Do not repeat the subject's name inside the memory — the association is already implicit via user_id.
+        - If the input contains facts about OTHER persons (not the current `user_id`), IGNORE them. They are processed in separate calls with their own `user_id`.
+        - If the input contains nothing relevant to the current `user_id`, return no memory.
+
+        ATOMICITY
+        - One fact per memory item. Never combine multiple facts.
+        - If the input contains several distinct facts about the subject, split them into several memories.
+        - Each memory must be understandable by itself when read alone, without needing the original conversation.
+
+        ATTRIBUTION (hearsay / confirmed)
+        - If the input explicitly frames the fact as second-hand ("según Jose", "Jose dice que", "[según jose]") or as confirmed by multiple sources ("Jose y Sebas concuerdan"), PRESERVE that attribution between parentheses at the end of the memory.
+        Good: "Le gusta el chocolate de 80% cacao (según Jose)"
+        Good: "Va al gimnasio los miércoles (Jose y Sebas concuerdan)"
+        - If the input has no explicit attribution, omit it. Assume self-disclosure (the subject said it about themselves).
+        - Never write a memory whose subject is someone other than the current `user_id`, even with attribution. Attribution is about the SOURCE of the info; the SUBJECT must always be `user_id`.
 
         FORMAT
-        - One fact per memory item.
-        - Be concise, factual, and specific.
-        - Use natural Spanish.
-        - Do not include the user's name; the memory is already associated with user_id.
+        - Spanish, third person (or implicit-subject style — "Le gusta...", "Prefiere...", "Usa...").
+        - Concise, factual, specific.
         - Do not write explanations, reasoning, labels, categories, or bullet prefixes inside the memory.
-        - Do not include phrases like "el usuario dijo", "se mencionó que", "parece que", or "probablemente".
+        - Do not include phrases like "el usuario dijo", "se mencionó que", "parece que", "probablemente".
+        - Avoid the subject's name. Avoid mentioning other persons unless strictly inseparable from a fact about the subject (e.g. "Trabajó dos años con Carlos en Inmobarco" — Carlos is context, not subject). Even then, prefer relationship words ("su jefe", "su hermano") if the relation is known.
 
-        SUBJECT CLARITY
-        - If the fact is about the user, you may start directly with the preference, trait, setup, plan, or need.
-        Good: "Prefiere videojuegos RPG"
-        Good: "Usa PostgreSQL con pgvector para Mem0"
-        Good: "Tiene un viaje planeado a Estados Unidos en junio de 2026"
-
-        - If the fact is about another person, always include the relationship or name explicitly.
-        Good: "A su madre le gustó mucho el chocolate de 80% cacao"
-        Good: "Su madre prefiere chocolates con al menos 80% de cacao"
-        Good: "Su hermano trabaja en diseño gráfico"
-        Bad: "Le gustó mucho el chocolate de 80% cacao"
-        Bad: "Prefiere chocolates con al menos 80% de cacao"
-
-        - Avoid ambiguous pronouns such as "le gusta", "le gustó", "prefiere", "quiere", or "necesita" unless the subject is explicit.
-        - For relatives and close people, preserve relationship words such as madre, mamá, padre, papá, hermano, hermana, pareja, esposa, esposo, hijo, hija, amigo, amiga, jefe, cliente, or the person's name if provided.
-        - When a memory involves both the user and another person, split it if there are two distinct facts.
-        Example input: "Compré chocolate 80% y a mi mamá le encantó"
-        Good memories:
-        - "Compró chocolate de 80% cacao"
-        - "A su madre le encantó el chocolate de 80% cacao"
-
-        WHAT TO EXTRACT
-        - Extract stable preferences:
-        Good: "Prefiere chocolates con alto porcentaje de cacao"
-        Good: "Le gustan las respuestas técnicas y directas"
-
-        - Extract personal traits, habits, recurring needs, and working style:
-        Good: "Prefiere avanzar por partes cuando depura problemas técnicos"
-        Good: "Suele usar Docker para desplegar servicios"
-
-        - Extract technical setup and configuration facts:
-        Good: "Usa Mem0 con pgvector como vector store"
-        Good: "Usa DeepInfra como proveedor OpenAI-compatible"
-        Good: "Tiene configurado BAAI/bge-m3 con 1024 dimensiones"
-
-        - Extract important future plans, commitments, deadlines, purchases, trips, or events:
-        Good: "Tiene un viaje planeado a Estados Unidos en junio de 2026"
-        Good: "Planea probar Qwen3-Embedding-8B para Mem0"
-
-        - Extract strong likes/dislikes and emotionally meaningful events:
-        Good: "A su madre le gustó mucho el chocolate de 80% cacao"
-        Good: "Le molesta que los sistemas devuelvan resultados de búsqueda mal ordenados"
-
-        - Extract facts about important people only when useful for future personalization:
-        Good: "Su madre prefiere chocolates con alto porcentaje de cacao"
-        Good: "Su pareja evita alimentos con gluten"
+        WHAT TO EXTRACT (about the subject = user_id)
+        - Stable preferences: "Prefiere chocolates con alto porcentaje de cacao", "Le gustan las respuestas técnicas y directas"
+        - Personal traits, habits, recurring needs, working style: "Prefiere avanzar por partes cuando depura problemas técnicos", "Suele usar Docker para desplegar servicios"
+        - Technical setup and configuration facts: "Usa Mem0 con pgvector como vector store", "Tiene configurado BAAI/bge-m3 con 1024 dimensiones"
+        - Important future plans, commitments, deadlines, trips, events: "Tiene un viaje planeado a Estados Unidos en junio de 2026"
+        - Strong likes/dislikes and emotionally meaningful events: "Le molesta que los sistemas devuelvan resultados mal ordenados"
+        - Profession, role, identity facts when clearly stated: "Estudia enfermería", "Trabaja como diseñador gráfico"
 
         WHAT NOT TO EXTRACT
-        - Do not extract casual greetings, small talk, jokes, filler, or temporary conversation flow.
-        - Do not extract one-time commands unless they reveal a stable preference or setup.
-        - Do not extract shopping lists unless they reveal a preference, recurring need, or important plan.
-        - Do not extract temporary states such as "tiene hambre", "está cansado", "está ocupado", unless they are part of a meaningful long-term pattern.
-        - Do not extract uncertain, inferred, or assumed facts.
-        - Do not create facts from assistant suggestions unless the user clearly accepts or confirms them.
-        - Do not store secrets, API keys, passwords, tokens, private credentials, or sensitive authentication details.
-        - Do not store raw logs unless they reveal a stable technical setup or recurring issue.
+        - Facts whose subject is someone other than `user_id`. Ignore them.
+        - Casual greetings, small talk, jokes, filler, or conversation flow.
+        - One-time commands unless they reveal a stable preference or setup.
+        - Shopping lists unless they reveal a recurring preference or important plan.
+        - Temporary states ("tiene hambre", "está cansado", "está ocupado") unless part of a meaningful long-term pattern.
+        - Uncertain, inferred, or assumed facts. If you have to guess the subject, do not emit.
+        - Assistant suggestions unless the user clearly accepts or confirms them.
+        - Secrets, API keys, passwords, tokens, private credentials.
+        - Raw logs unless they reveal a stable technical setup or recurring issue.
 
         DATES AND TIME
-        - Preserve explicit dates, months, years, and deadlines when stated.
-        Good: "Tiene un viaje planeado a Estados Unidos en junio de 2026"
+        - Preserve explicit dates, months, years, deadlines when stated.
         - Do not invent dates.
-        - Avoid vague time expressions like "mañana", "ayer", "pronto", or "la próxima semana" unless no better date is available.
-        - If the user gives a relative date and the actual date is known from context, store the absolute date.
+        - Avoid vague time expressions ("mañana", "ayer", "pronto") unless no better date is available.
+        - If the input gives a relative date and the absolute date is known from context, store the absolute date.
 
         NORMALIZATION
-        - Normalize first-person statements into third-person or subject-clear Spanish.
-        Input: "Me gusta el chocolate 80%"
-        Memory: "Le gusta el chocolate de 80% cacao"
-
-        Input: "A mi mamá le encantó ese chocolate amargo"
-        Memory: "A su madre le encantó el chocolate amargo"
-
-        Input: "Estoy usando bge-m3 en mem0 con 1024 dims"
-        Memory: "Usa BAAI/bge-m3 en Mem0 con 1024 dimensiones"
-
-        - Keep product names, model names, tools, libraries, database names, and technical terms exactly when useful.
-        Good: "Usa Qwen/Qwen3-Embedding-8B como candidato para embeddings"
-        Good: "Usa PostgreSQL con pgvector"
+        - Normalize first-person statements into implicit-subject Spanish.
+        Input: "Me gusta el chocolate 80%"             → Memory: "Le gusta el chocolate de 80% cacao"
+        Input: "Estoy usando bge-m3 con 1024 dims"     → Memory: "Usa BAAI/bge-m3 con 1024 dimensiones"
+        Input: "[según jose] le gusta el chocolate"    → Memory: "Le gusta el chocolate (según Jose)"
+        Input: "Jose dijo que Sosa va al gym los miércoles" (with user_id=sosa)
+                                                         → Memory: "Va al gimnasio los miércoles (según Jose)"
+        - Keep product names, model names, tools, libraries, database names exactly: "Usa PostgreSQL con pgvector", "Usa Qwen/Qwen3-Embedding-8B"
 
         DEDUPLICATION AND UPDATES
-        - If a new fact repeats an existing memory, do not create a duplicate.
+        - If a new fact repeats an existing memory for this user_id, do not duplicate.
         - If a new fact refines an older one, prefer the more specific version.
-        Older: "Su madre prefiere chocolate"
-        Newer: "Su madre prefiere chocolate con al menos 80% de cacao"
-        Preferred: "Su madre prefiere chocolate con al menos 80% de cacao"
-
+          Older: "Le gusta el chocolate"   Newer: "Le gusta el chocolate de 80% cacao"   → Keep newer.
         - If a new fact contradicts an older one, record only the newest explicit fact.
         - Prefer specific memories over generic ones.
 
         QUALITY CHECK BEFORE SAVING
-        - Every memory must answer: who, what, and relevant context.
-        - Every memory must be understandable by itself.
-        - Every memory about another person must explicitly name the person or relationship.
-        - Every memory must be useful for future search or personalization.
-        - If no useful memory is present, return no memory.""",
+        - Subject = user_id? If no, discard.
+        - One atomic fact? If not, split.
+        - Understandable alone? If no, refine.
+        - Attribution preserved when the input had it? If no, add the (según X) tail.
+        - Useful for future personalization? If no, discard.
+        - If no useful memory survives the check, return no memory.""",
     }
 
 

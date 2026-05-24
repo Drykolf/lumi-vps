@@ -20,7 +20,7 @@ from agent.memory import (
     resolve_person_mention,
     get_known_person,
     get_relations,
-    search_person_relevant,
+    search_relevant,
 )
 from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
@@ -180,8 +180,10 @@ async def _resolve_entities(entities: list[dict], user_id: str, message: str) ->
                 except Exception as e:
                     logger.warning(f"[resolve] profile/relations fetch failed for {pid}: {e}")
                 try:
-                    ctx["scoped_memories"] = await search_person_relevant(
-                        user_id=user_id, person_id=pid, query=message,
+                    # Modelo C: user_id en Mem0 = person_id del sujeto.
+                    # "Qué sé sobre Sosa" => search_relevant(user_id="sosa").
+                    ctx["scoped_memories"] = await search_relevant(
+                        user_id=pid, query=message,
                         limit=3, min_score=0.5,
                     )
                 except Exception as e:

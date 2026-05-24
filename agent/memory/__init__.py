@@ -26,7 +26,6 @@ from agent.memory.episodic import (
 )
 from agent.memory.semantic import (
     search_relevant,
-    search_person_relevant,
     add_memory,
     save_explicit,
 )
@@ -72,6 +71,7 @@ from agent.memory.mindstream.consolidation import (
     consolidate_person_interest,
     update_profiles,
     update_relations,
+    consolidate_daily_memories,
 )
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
@@ -99,7 +99,6 @@ __all__ = [
     "get_recent_user_log",
     "get_history_since",
     "search_relevant",
-    "search_person_relevant",
     "add_memory",
     "get_user_information",
     "set_user_information",
@@ -138,6 +137,7 @@ __all__ = [
     "consolidate_person_interest",
     "update_profiles",
     "update_relations",
+    "consolidate_daily_memories",
     "cleanup_history",
     "cleanup_mood_logs",
     "cleanup_heartbeat_runs",

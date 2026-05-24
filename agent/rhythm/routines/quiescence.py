@@ -7,7 +7,7 @@ Execution order (each step depends on the previous one having a stable view):
   2. consolidate_person_interest   — LLM-evaluated per-person deltas
   3. update_profiles               — aliases / name / emotional_tone refinement (identity-only)
   4. update_relations              — new relations + infer_family_relations
-  5. consolidate_daily_memories    — extract atomic facts → Mem0 (stub, out of scope)
+  5. consolidate_daily_memories    — extract atomic facts → Mem0 (subject-centric Modelo C)
   6. extract_daily_learnings       — diary entries (already wired)
   7. analyze_daily_tasks           — skill_proposals (stub)
 
@@ -131,11 +131,20 @@ async def nightly_quiescence() -> None:
                 ],
             )
 
-            # ── Step 5 — daily memories (stub) ────────────────────────────
+            # ── Step 5 — daily memories ───────────────────────────────────
             await _run_step(
                 log,
                 "consolidate_daily_memories",
                 consolidate_daily_memories,
+                expected_keys=[
+                    "candidates",
+                    "persons_evaluated",
+                    "persons_skipped_threshold",
+                    "persons_skipped_unknown",
+                    "facts_extracted",
+                    "mem0_calls",
+                    "mem0_results",
+                ],
             )
 
             # ── Step 6 — diary ────────────────────────────────────────────
@@ -236,17 +245,27 @@ async def update_relations() -> dict:
 
 # ── Step 5 ─────────────────────────────────────────────────────────────────────
 
-async def consolidate_daily_memories() -> dict | None:
-    """B5 pending — extract atomic facts per person from turns since last
-    successful run and push to Mem0 via `add_memory()` with metadata.person_id.
+async def consolidate_daily_memories() -> dict:
+    """Per-person LLM extraction of atomic facts → Mem0 (subject-centric Modelo C).
 
-    Recovery pattern: read period_start from heartbeat_state, filter history
-    by `ts >= period_start`.
-
-    Expected metrics on implementation:
-      facts_extracted, memories_written, persons_touched
+    Implementation in agent/memory/mindstream/consolidation.py. Reads its own
+    last_success_at bookmark to compute period_start; a failed prior run
+    extends tonight's window automatically.
     """
-    return None
+    from agent.memory.mindstream.consolidation import (
+        consolidate_daily_memories as _impl,
+    )
+    period_start = await get_last_success("quiescence.consolidate_daily_memories")
+    metrics = await _impl(period_start)
+    logger.info(
+        f"[quiescence] daily_memories done: "
+        f"candidates={metrics['candidates']} "
+        f"evaluated={metrics['persons_evaluated']} "
+        f"facts={metrics['facts_extracted']} "
+        f"mem0_calls={metrics['mem0_calls']} "
+        f"mem0_results={metrics['mem0_results']}"
+    )
+    return metrics
 
 
 # ── Step 6 ─────────────────────────────────────────────────────────────────────

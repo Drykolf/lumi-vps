@@ -23,26 +23,52 @@ def _headers() -> dict:
     return {"Content-Type": "application/json", "X-API-Key": MEM0_API_KEY}
 
 
-async def add_memory(messages: list[dict], user_id: str) -> list[dict]:
+async def add_memory(
+    messages: list[dict],
+    user_id: str,
+    metadata: dict | None = None,
+    infer: bool | None = None,
+    prompt: str | None = None,
+) -> list[dict]:
     """
-    Envía la conversación a Mem0 para extracción de hechos.
-    Se llama al cierre de cada turno o sesión.
+    Envía contenido a Mem0 para extracción de hechos, scopeado por user_id.
+
+    Bajo Modelo C (subject-centric), user_id es el PERSON_ID del sujeto del hecho,
+    no el hablante. La fuente/atribución va en metadata y embebida en el texto
+    (ej: "(según Jose)") cuando el hecho es hearsay.
+
+    Args:
+        messages: lista de {"role", "content"} para Mem0.
+        user_id: person_id del sujeto.
+        metadata: claves arbitrarias (source_role, source_user_ids, history_ids, ...).
+        infer: si True, Mem0 re-extrae y deduplica vs memorias existentes del user_id.
+               Si False, guarda verbatim (usado por save_explicit).
+               Si None, defaultea al server (True).
+        prompt: override per-request del custom_instructions global.
     """
+    payload: dict = {"messages": messages, "user_id": user_id}
+    if metadata is not None:
+        payload["metadata"] = metadata
+    if infer is not None:
+        payload["infer"] = infer
+    if prompt is not None:
+        payload["prompt"] = prompt
+
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.post(
                 f"{MEM0_URL}/memories",
                 headers=_headers(),
-                json={"messages": messages, "user_id": user_id},
+                json=payload,
             )
             resp.raise_for_status()
             results = resp.json().get("results", [])
             if results:
                 facts = [r.get("memory", "") for r in results]
-                logger.info(f"add_memory: extracted {facts}")
+                logger.info(f"add_memory: user_id={user_id} extracted {facts}")
             return results
     except Exception as e:
-        logger.warning(f"mem0 add_memory failed: {e}")
+        logger.warning(f"mem0 add_memory failed (user_id={user_id}): {e}")
         return []
 
 
@@ -69,51 +95,6 @@ async def search_relevant(user_id: str, query: str, limit: int = 5, min_score: f
             return [r["memory"] for r in results if r.get("memory") and r.get("score", 0) >= min_score]
     except Exception as e:
         logger.warning(f"mem0 search_relevant failed: {e}")
-        return []
-
-
-async def search_person_relevant(
-    user_id: str,
-    person_id: str,
-    query: str,
-    limit: int = 5,
-    min_score: float = 0.5,
-    return_raw: bool = False,
-) -> list[str] | list[dict]:
-    """
-    Busqueda semantica en Mem0 filtrada a metadata.person_id.
-    Para obtener hechos relevantes sobre una persona especifica.
-    Retorna lista de strings o dicts segun return_raw.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-            resp = await client.post(
-                f"{MEM0_URL}/search",
-                headers=_headers(),
-                json={
-                    "query": query,
-                    "filters": {
-                        "user_id": user_id,
-                        "metadata.person_id": person_id,
-                    },
-                    "top_k": limit,
-                },
-            )
-            resp.raise_for_status()
-            results = resp.json().get("results", [])
-            logger.info(
-                f"search_person_relevant: person={person_id} "
-                f"query='{query[:60]}' -> {len(results)} results"
-            )
-            if return_raw:
-                return [r for r in results if r.get("score", 0) >= min_score]
-            return [
-                r["memory"]
-                for r in results
-                if r.get("memory") and r.get("score", 0) >= min_score
-            ]
-    except Exception as e:
-        logger.warning(f"mem0 search_person_relevant failed: {e}")
         return []
 
 

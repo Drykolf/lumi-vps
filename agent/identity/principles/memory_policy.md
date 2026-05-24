@@ -2,13 +2,40 @@
 
 ## Purpose
 Defines what semantic data Lumi stores in **Mem0** about each person, based on
-their `interest_score` (stored in the `persons` table in SQLite `core_state.db`).
+their `interest_score` (stored in the `known_persons` table in SQLite `core.db`).
 This skill is used ONLY when **saving** memories — not when searching or
 loading context. For the read path see `memory_search.md`.
 
-**Language rule:** all memories MUST be stored in Spanish, third person,
-concise and factual.
-Example: `"Gloria sabe de enfermería"` — never `"Gloria knows about nursing"`.
+**Language rule:** all memories MUST be stored in Spanish, third person (or
+implicit-subject style: "Le gusta…", "Prefiere…"), concise and factual.
+Example: `"Sabe de enfermería"` under `user_id="gloria1"` — never
+`"Gloria sabe de enfermería"` or `"Gloria knows about nursing"`.
+
+---
+
+## Modelo C — subject-centric (canonical)
+
+**Hard rule:** in Mem0, `user_id` IS the canonical `known_persons.person_id` of
+the **subject** of the memory — not the speaker who said it.
+
+| Speaker | Subject | Mem0 `user_id` |
+|---|---|---|
+| Jose dice "me gusta el chocolate" | Jose | `jose` |
+| Jose dice "a Sosa le gusta el chocolate" | Sosa | `sosa` (con `metadata.source_role="hearsay"`) |
+| Grupo: Jose y Sebas concuerdan sobre Sosa | Sosa | `sosa` (`source_role="confirmed"`) |
+
+Cada memoria pertenece a UN sujeto. Si el input menciona varios sujetos, se
+splittea en varias llamadas — una por `user_id`. **Nunca** se escribe una
+memoria cuyo sujeto sea distinto del `user_id` de la llamada.
+
+**Atribución** va embebida en el texto al final entre paréntesis cuando el
+hecho NO es self-disclosure: `"Le gusta el chocolate (según Jose)"`. Esto
+preserva la procedencia incluso después del recall (donde sólo se devuelve
+`memory.text`).
+
+`save_explicit` ("guarda esta receta") es la única excepción y mantiene
+semántica **speaker-centric** (libreta personal): `user_id=hablante` +
+`metadata.category`. No es un hecho sobre alguien.
 
 ---
 
@@ -16,25 +43,21 @@ Example: `"Gloria sabe de enfermería"` — never `"Gloria knows about nursing"`
 
 | Data | Where it lives | Skill that owns it |
 |------|----------------|---------------------|
-| Person registry, name, score, status, tone | SQLite `persons` table | `interest_policy.md` |
-| Connections between third parties | SQLite `relations` table | `relation_policy.md` |
-| **Atomic facts about a person** | **Mem0** (this skill) | `memory_policy.md` |
-| Jose's structured profile | Mem0 (`type=user_profile`) | `reflection_policy.md` |
-| Session summaries | Mem0 (`type=session_summary`) | `reflection_policy.md` |
+| Person registry, name, score, status, tone | SQLite `known_persons` | `interest_policy.md` |
+| Connections between third parties | SQLite `relations` | `relation_policy.md` |
+| **Atomic facts about a person** | **Mem0** (this skill, `user_id=person_id`) | `memory_policy.md` |
+| Lumi's own facts | Mem0 (`agent_id="lumi"`) — TODO sesión aparte | `reflection_policy.md` |
+| Session summaries | Mem0 (`type=session_summary`) — TODO | `reflection_policy.md` |
 | Lumi's own state | SQLite `lumi_state` | `mood_policy.md` |
 | Future events with date | Mem0 (`type=future_event`) | `agenda_policy.md` (Phase 6) — NOT here |
-| Conversation turns | SQLite `history.db` | infrastructure, not a skill |
-
-**Hard rule:** every memory written to Mem0 MUST include `metadata.person_id`
-matching a row in SQLite `persons`. If the person does not exist yet, create
-the row first via `interest_policy.md` initialization.
+| Conversation turns | SQLite `traces.db.history` | infrastructure |
 
 ---
 
 ## Identity rule
 
-**Jose** is identified by `user_id="jose"` and is the only row with `is_jose=1`.
-He is the primary person Lumi speaks with. A third party named "Jose" is a
+**Jose** is identified by `person_id="jose"` (also his `user_id` as a speaker).
+He has a permanent interest floor of `0.70`. A third party named "Jose" is a
 DIFFERENT entity — assign a distinct `person_id` such as `jose_primo` or
 `jose_cliente`. Never collapse identities.
 
@@ -48,16 +71,16 @@ This skill then evaluates whether anything is worth saving to Mem0.
 
 | Person | Initial score | Source |
 |--------|---------------|--------|
-| Jose | `0.70` (permanent floor) | seeded at DB init |
+| Jose | `0.70` (permanent floor) | seeded at DB init (currently 1.00) |
 | New interlocutor or third party | `0.10` | created by `interest_policy.md` on first mention |
 
 ---
 
 ## What to store by interest level
 
-The score is read from `persons.interest_score`. Storage rules apply at the
-moment of writing. If the score crosses a threshold, `reflection_policy.md`
-triggers an upgrade or downgrade pass.
+The score is read from `known_persons.interest_score`. Storage rules apply at the
+moment of writing (nightly `consolidate_daily_memories` is the canonical writer).
+The score also determines the **density** of extraction:
 
 ### `< 0` — Dislike / Aversion
 Store in Mem0:
@@ -65,14 +88,13 @@ Store in Mem0:
 - History of conflict with Jose or with Lumi
 
 The person's name and the dislike reason summary live in
-`persons.notes` (SQLite) — Mem0 holds the granular facts.
+`known_persons.notes` (SQLite) — Mem0 holds the granular facts.
 Do NOT store neutral or positive facts at this level — they are noise.
 
 ### `0.10 to 0.39` — Neutral / Unknown
 Store in Mem0: **nothing.**
 Only the SQLite row exists. This level is "exists, no judgment yet".
-The single line in `persons.notes` (e.g. *"mencionada por Jose el 22 de abril"*)
-is sufficient.
+The single line in `known_persons.notes` is sufficient.
 
 ### `0.40 to 0.59` — Relevant Acquaintance
 Store in Mem0:
@@ -85,7 +107,7 @@ Store in Mem0:
 - Main preferences and habits
 - Notable patterns
 
-### `0.70` — Jose only
+### `0.70+` — Jose only
 Store in Mem0:
 - Everything relevant: full profile facts, behavioral patterns, preferences,
   technical context
@@ -93,50 +115,71 @@ Store in Mem0:
 - One fact per memory item — never combine
 
 **Hard rule:** no person other than Jose may reach or exceed `0.70`.
-This is enforced by a SQLite CHECK constraint.
+This is enforced by `social.add_delta`'s cap logic.
 
 ---
 
-## Memory types written by this skill
+## Memory call shapes
 
-| Mem0 type | Indexed by | Description | When |
-|-----------|-----------|-------------|------|
-| `fact` | `user_id="jose"` + `metadata.person_id` | Single atomic fact about a person | Each relevant turn |
-| `lumi_fact` | `agent_id="lumi"` | Fact about Lumi herself (her preferences, history, appearance choices) | When Jose tells Lumi something about herself |
+### Daily fact extraction (nightly step 5)
 
-`user_profile`, `session_summary`, `lumi_state` updates → `reflection_policy.md`.
-`future_event` → `agenda_policy.md` (Phase 6).
+```python
+await add_memory(
+    messages=[{"role": "user", "content": "Le gusta el chocolate de 80% cacao (según Jose)"}],
+    user_id="sosa",
+    metadata={
+        "source_role": "hearsay",          # self | hearsay | confirmed
+        "source_user_ids": ["jose"],
+        "history_ids": [421],
+        "period_start": "2026-05-23T03:00:00+00:00",
+    },
+    infer=True,  # Mem0 re-extracts + dedups against existing memories of "sosa"
+)
+```
+
+### Explicit save ("guarda esta receta")
+
+Speaker-centric exception:
+
+```python
+await save_explicit(
+    content="Receta de ajiaco: ...",
+    user_id="jose",            # the speaker — their personal notebook
+    category="recipe",
+)
+```
 
 ---
 
 ## General rules
 
-1. **One fact per memory item** — never combine multiple facts into one entry.
-2. **If a fact contradicts existing memory → UPDATE immediately.** The Mem0
-   v2.0.0 deduplication via `history.db` handles this; do not write a parallel
-   conflicting fact.
+1. **One fact per memory item** — never combine multiple facts.
+2. **If a fact contradicts existing memory → Mem0 deduplication updates it.**
+   This runs automatically when `infer=True` (the default for the nightly
+   pipeline). Mem0's `history.db` keeps the audit trail.
 3. **If relevance is uncertain → do not save.** Noise is worse than gaps.
 4. **Facts about people below the `0.10` threshold → do not save.** They will
    not exist in SQLite either if they were never mentioned with intent.
 5. **If `interest_score` drops below `0.10` after decay → delete stored facts**
-   (keep only `persons.notes` if negative). This is run by
-   `reflection_policy.md` at session close.
-6. **Always include `metadata.person_id`** matching a SQLite row. A memory
-   without this metadata is orphaned and unreachable by `memory_search.md`.
+   (keep only `known_persons.notes` if negative). Future work: weekly
+   `cleanup_memory_tiers` (see [forgetting.py]).
+6. **Sujeto único por llamada.** Cada llamada a `add_memory` escribe sobre UN
+   sujeto. Si una fuente menciona N personas, se hacen N llamadas — una por
+   `user_id`. Nunca un fact donde el sujeto sea otro que `user_id`.
 
 ---
 
 ## Explicit save requests
 
-When Jose explicitly asks Lumi to remember something ("guarda esto", 
-"anota", "recuerda esta receta"), the content is saved verbatim to Mem0 
-WITHOUT passing through the fact extractor. Rules:
+When the speaker explicitly asks Lumi to remember something ("guarda esto",
+"anota", "recuerda esta receta"), the content is saved verbatim to Mem0
+WITHOUT passing through the fact extractor (`infer=False`). Rules:
 
 - Save the complete content as a single memory item
-- Use metadata category to classify: recipe | link | note | code | reference
-- Do not summarize or extract — preserve exactly what Jose provided
-- user_id="jose" always
-- No person_id required for this type
+- Use metadata category to classify: `recipe | link | note | code | reference`
+- Do not summarize or extract — preserve exactly what was provided
+- `user_id = speaker` (it's their personal notebook, not a fact about a third party)
+- No `person_id` subject is implied
 
 ---
 
@@ -146,34 +189,48 @@ WITHOUT passing through the fact extractor. Rules:
 - Greetings and casual conversation without content
 - Temporary states without pattern: *"estoy cansado hoy"*
 - Trivial plans without emotional weight
-- Duplicate facts already in memory
+- Duplicate facts already in memory (Mem0 dedup handles this when `infer=True`)
 - Anything that belongs in `relation_policy.md` (connections between people)
 - Anything that belongs in `agenda_policy.md` (dated future events)
-- Lumi's emotional reactions to a person — those live in `persons.emotional_tone`
+- Lumi's emotional reactions to a person — those live in `known_persons.emotional_tone`
   and `mood_policy.md`, not in Mem0 facts
+- **Cross-references**: facts whose subject is a different person than
+  `user_id`. They will be extracted in that other person's own loop.
 
 ---
 
-## Worked example
+## Worked example (Modelo C)
 
 Jose says: *"Gloria, mi mamá, está estudiando enfermería. Le dieron buenas notas la semana pasada. La quiero mucho."*
 
-Result of WRITE pipeline:
+Nightly pipeline:
 
-1. `interest_policy.md` — Gloria does not exist yet → create
-   `persons` row: `person_id='gloria1', canonical_name='Gloria', score=0.10`.
-   Then apply deltas: explicit positive mention (+0.01) + high positive
-   emotional weight (+0.03) + Jose declares closeness via "la quiero mucho"
-   (+0.05). Final: `0.19`. Still below `0.40` → no Mem0 facts written by
-   this skill yet.
-2. `relation_policy.md` — explicit connection → create relation
-   `from='jose', to='gloria1', type='family', description='Gloria es la madre de Jose'`.
-3. `memory_policy.md` (this skill) — score is `0.19`, below `0.40`. Write
-   nothing to Mem0. Update `persons.notes` to *"mencionada por Jose como su madre, estudia enfermería"*.
+1. **Step 1 (`consolidate_entity_mentions`)** — Gloria is resolved/created as
+   `person_id='gloria1'`, `interest_score=0.10`, relation `jose -mother_of-> gloria1`
+   inferred or directly added later.
+2. **Step 2 (`consolidate_person_interest`)** — multiple positive mentions
+   (love declaration, supportive talk) push Gloria's delta to roughly `+0.09`.
+   Final score: `0.19`. Still below `0.40` threshold.
+3. **Step 3-4** — profile/relations refined (no new aliases here).
+4. **Step 5 (`consolidate_daily_memories`)** — Gloria is a candidate but her
+   tier (`0.10-0.39`) returns `None` from `_tier_for_person` → **skipped**, no
+   Mem0 write. The SQLite row + relation are enough for now.
+5. **Step 6** — diary entry references the day's affective tone.
 
-Two weeks later, after several positive mentions, Gloria's score is `0.42`.
-Now `reflection_policy.md` triggers an upgrade pass:
+Two weeks later, after sustained positive mentions, Gloria's score reaches
+`0.42`. Now nightly step 5:
 
-1. Re-read all conversation turns where Gloria was mentioned.
-2. Extract atomic facts: *"Gloria estudia enfermería"*, *"Gloria recibió buenas notas en mayo de 2026"*.
-3. Write each as a Mem0 `fact` with `metadata.person_id='gloria1'`.
+1. Tier resolves to `mid` (0.40-0.59).
+2. LLM extractor receives Gloria's identity + sessions where she appeared.
+3. Extracts atomic facts subject = gloria1:
+   - `"Estudia enfermería (según Jose)"` → `add_memory(user_id="gloria1", ...)`
+   - `"Recibió buenas notas en su parcial de farmacología en mayo 2026 (según Jose)"`
+4. Mem0 with `infer=True` re-normalises and stores; future searches under
+   `user_id="gloria1"` return these facts.
+
+If during that same period Jose said *"a mí y a Cristian nos gusta el chocolate"*:
+- En la iteración de Jose (`user_id="jose"`): se emite `"Le gusta el chocolate"`,
+  `source_role="self"`.
+- En la iteración de Cristian (`user_id="cristian"`): se emite `"Le gusta el
+  chocolate (según Jose)"`, `source_role="hearsay"`.
+- Nunca una sola memoria que mezcle ambos sujetos.
