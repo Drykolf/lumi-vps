@@ -25,16 +25,29 @@ scheduler = AsyncIOScheduler(timezone=COL)
 def register_rhythm_jobs() -> None:
     """Register all scheduled jobs with APScheduler. Called at startup."""
     from agent.rhythm.routines.pulse import rhythm_tick
+    from agent.rhythm.routines.mood_state import mood_state_tick
     from agent.rhythm.routines.morning import daily_morning
     from agent.rhythm.routines.quiescence import nightly_quiescence
     from agent.rhythm.routines.forgetting import weekly_decay
 
+    """TODO
     scheduler.add_job(
         rhythm_tick,
         "interval",
         minutes=RHYTHM_TICK_MINUTES,
         timezone=COL,
         id="rhythm_tick",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+    )"""
+
+    scheduler.add_job(
+        mood_state_tick,
+        "cron",
+        minute=0,
+        timezone=COL,
+        id="mood_state",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=300,
