@@ -105,9 +105,9 @@ async def mood_check() -> None:
         involved_people = _build_involved_people(messages)
         new_state, reasoning = await evaluate_mood(messages, current, involved_people=involved_people or None)
         trigger = "mood_check"
-        note = f"LLM eval | msgs={len(messages)} | {reasoning[:120]}"
+        note = f"LLM eval | msgs={len(messages)} | {reasoning[:200]}"
         mood_change = True
-        logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:120]}")
+        logger.info(f"[mood_check] LLM eval | msgs={len(messages)} | {reasoning[:200]}")
 
     if mood_change:
         write_state(new_state)

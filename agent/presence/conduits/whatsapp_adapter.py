@@ -257,7 +257,51 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
 from agent.cognition.stream import run
 from agent.memory import save_turn, get_recent_session_log
 from agent.presence.conduits import group_policy
+from agent.presence.conduits.debounce import DebouncePolicy
 
+_debounce = DebouncePolicy(debounce_seconds=5.0, max_messages=10)
+
+
+# ── Flush handlers (llamados por el debounce tras la ventana de silencio) ──────
+
+async def _flush_direct(messages: list) -> None:
+    parsed = messages[-1]
+    parsed.metadata["channel_type"] = "direct"
+    # Concatenar todos los mensajes de la ventana como un solo turno
+    text = "\n".join(m.text for m in messages)
+    reply = await run(parsed.person_id, text, parsed.metadata)
+    try:
+        await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"[flush_direct] sendText failed: {e}")
+
+
+async def _flush_group(messages: list) -> None:
+    # Guardar todos los mensajes anteriores al ultimo en el historial individualmente
+    for m in messages[:-1]:
+        save_turn(m.person_id, "user", m.text, session_id=m.metadata["session_id"])
+
+    parsed = messages[-1]
+    parsed.metadata["channel_type"] = "group"
+    llm_text = parsed.text
+    if parsed.quoted_text:
+        llm_text = (
+            f"{parsed.text}\n"
+            f"(el usuario esta respondiendo directamente a un mensaje anterior: "
+            f"{parsed.quoted_text})"
+        )
+    reply = await run(parsed.person_id, llm_text, parsed.metadata)
+    try:
+        sent_id = await send_text(parsed.instance, parsed.remote_jid, reply)
+    except Exception as e:
+        logger.error(f"[flush_group] sendText failed: {e}")
+        return
+    group_policy.register_lumi_response(
+        parsed.remote_jid, sent_id, user_msg_text=parsed.text
+    )
+
+
+# ── Handlers de entrada ───────────────────────────────────────────────────────
 
 async def _handle_group(parsed: InboundMessage) -> dict:
     decision = group_policy.classify_inbound(
@@ -293,38 +337,18 @@ async def _handle_group(parsed: InboundMessage) -> dict:
             group_policy.close_window(parsed.remote_jid)
             return {"status": "closed", "person_id": parsed.person_id, "msg_id": sent_id}
         group_policy.reopen_window(parsed.remote_jid)
-        # fallthrough → engage_main
+        # fallthrough → engage_main con debounce
 
-    # engage_main (o reabierto tras KEEP)
-    parsed.metadata["channel_type"] = "group"
-    llm_text = parsed.text
-    if parsed.quoted_text:
-        llm_text = (
-            f"{parsed.text}\n"
-            f"(el usuario esta respondiendo directamente a un mensaje anterior: "
-            f"{parsed.quoted_text})"
-        )
-    reply = await run(parsed.person_id, llm_text, parsed.metadata)
-    try:
-        sent_id = await send_text(parsed.instance, parsed.remote_jid, reply)
-    except Exception as e:
-        logger.error(f"sendText failed: {e}")
-        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
-    group_policy.register_lumi_response(
-        parsed.remote_jid, sent_id, user_msg_text=parsed.text
-    )
-    return {"status": "ok", "person_id": parsed.person_id}
+    # engage_main (o reabierto tras KEEP): encolar y responder tras ventana de silencio
+    sid = parsed.metadata["session_id"]
+    _debounce.enqueue(sid, parsed, _flush_group)
+    return {"status": "queued", "person_id": parsed.person_id}
 
 
 async def _handle_direct(parsed: InboundMessage) -> dict:
-    parsed.metadata["channel_type"] = "direct"
-    reply = await run(parsed.person_id, parsed.text, parsed.metadata)
-    try:
-        await send_text(parsed.instance, parsed.remote_jid, reply)
-    except Exception as e:
-        logger.error(f"sendText failed: {e}")
-        return {"status": "ok", "person_id": parsed.person_id, "send_error": str(e)}
-    return {"status": "ok", "person_id": parsed.person_id}
+    sid = parsed.metadata["session_id"]
+    _debounce.enqueue(sid, parsed, _flush_direct)
+    return {"status": "queued", "person_id": parsed.person_id}
 
 
 async def handle_inbound(parsed: InboundMessage) -> dict:
