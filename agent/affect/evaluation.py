@@ -158,6 +158,21 @@ Terceros desconocidos suelen afectar más irritation que mood_valence.
 Si ya se aplicó decay determinista, no apliques silence decay otra vez.
 Si el contexto es insuficiente, haz el ajuste más pequeño razonable.
 
+## Participación por sesión
+
+El mensaje del usuario incluye un bloque "Participación por sesión" que indica, para cada sesión del período, si Lumi fue participant (envió al menos un mensaje) u observer (no envió ningún mensaje, solo estuvo presente).
+
+Reglas según tipo de sesión:
+
+**Sesiones participant**: Lumi participó activamente. Todos los turnos afectan su mood de forma normal — incluyendo actualizar last_interaction_at y last_meaningful_interaction_at si aplica.
+
+**Sesiones observer**: Lumi estuvo en el canal pero NO envió ningún mensaje propio. Para esas sesiones:
+- Ser mencionada por nombre en un mensaje ajeno NO cuenta como interacción de Lumi.
+- Si el grupo estuvo activo y prolongado sin incluirla, puede subir levemente presence_need (máx +0.03) e irritation (máx +0.02).
+- NO apliques cambios positivos de mood_valence o mood_energy por actividad ajena en esas sesiones.
+- Si en el período hubo TANTO sesiones participant como sesiones observer: evalúa el mood combinando ambas — las sesiones participant tienen peso normal, las observer tienen peso reducido.
+- Si TODAS las sesiones del período son observer (Lumi nunca habló en ninguna): devuelve last_interaction_at y last_meaningful_interaction_at EXACTAMENTE con los mismos valores de current_mood_state. No los avances.
+
 Devuelve solo estos campos:
 {
   "mood_valence": number,
@@ -192,16 +207,51 @@ Reglas:
 # Context builder
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _compute_session_participation(messages: list[dict]) -> tuple[str, bool]:
+    """Compute per-session participation mode for mood eval.
+
+    Returns (participation_block_text, lumi_participated_any).
+    lumi_participated_any is True if Lumi sent at least one message in any session.
+    """
+    sessions_info: dict[str, dict] = {}
+    session_order: list[str] = []
+    for m in messages:
+        sid = m.get("session_id") or "unknown"
+        if sid not in sessions_info:
+            sessions_info[sid] = {"total": 0, "lumi": 0, "first_ts": m.get("ts", "")}
+            session_order.append(sid)
+        sessions_info[sid]["total"] += 1
+        if m.get("role") == "assistant":
+            sessions_info[sid]["lumi"] += 1
+
+    lumi_participated_any = any(info["lumi"] > 0 for info in sessions_info.values())
+
+    lines: list[str] = []
+    for sid in session_order:
+        info = sessions_info[sid]
+        ts_label = info["first_ts"][:16] if info["first_ts"] else "?"
+        if info["lumi"] > 0:
+            n = info["lumi"]
+            label = f"participant — Lumi respondió {n} {'vez' if n == 1 else 'veces'}"
+        else:
+            label = f"observer — Lumi no respondió ({info['total']} turnos de otros)"
+        lines.append(f"- Sesión {sid[:12]} ({ts_label}): {label}")
+
+    block = "Participación por sesión:\n" + "\n".join(lines) if lines else ""
+    return block, lumi_participated_any
+
+
 def _build_eval_context(
     messages: list[dict],
     current_state: dict,
     involved_people: dict | None = None,
-) -> tuple[str, str]:
+) -> tuple[str, str, bool]:
     """
-    Build (system_prompt, user_message) for the LLM mood evaluation call.
+    Build (system_prompt, user_message, lumi_participated_any) for the LLM mood evaluation call.
 
     System = lumi_soul.md + mood_policy.md + MOOD_EVAL_PROMPT
-    User   = timestamp + mood state + involved people + transcript grouped by session
+    User   = timestamp + participation summary + mood state + involved people + transcript grouped by session
+    lumi_participated_any: True if Lumi sent at least one message in any session of the period.
     """
     from agent.cognition.working_memory import format_turns_grouped
 
@@ -210,6 +260,7 @@ def _build_eval_context(
     now = datetime.now(UTC)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    participation_block, lumi_participated_any = _compute_session_participation(messages)
     transcript = format_turns_grouped(messages, current_session_id=None, now=now)
 
     involved_block = (
@@ -220,14 +271,15 @@ def _build_eval_context(
 
     user_msg = (
         f"Current timestamp: {now_str}\n\n"
-        "Current mood state:\n"
+        + (f"{participation_block}\n\n" if participation_block else "")
+        + "Current mood state:\n"
         f"{json.dumps(current_state, ensure_ascii=False, indent=2)}\n\n"
         f"Personas involucradas:\n{involved_block}\n\n"
         "Recent context:\n"
         f"{transcript}"
     )
 
-    return system_prompt, user_msg
+    return system_prompt, user_msg, lumi_participated_any
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -257,7 +309,9 @@ async def evaluate_mood(
     """
     from agent.expression.synapses import chat, ModelGroup
 
-    system_prompt, user_msg = _build_eval_context(messages, current_state, involved_people)
+    system_prompt, user_msg, lumi_participated_any = _build_eval_context(
+        messages, current_state, involved_people
+    )
 
     try:
         response = await chat(
@@ -293,6 +347,13 @@ async def evaluate_mood(
             elif field in ("last_interaction_at", "last_meaningful_interaction_at"):
                 val = data[field]
                 new_state[field] = str(val) if val else None
+
+        # Guard: if Lumi was purely an observer in ALL sessions (never sent a message),
+        # preserve the existing interaction timestamps — she didn't actually interact.
+        if not lumi_participated_any:
+            for field in ("last_interaction_at", "last_meaningful_interaction_at"):
+                new_state[field] = current_state.get(field)
+            logger.info("[mood_eval] observer-only period: last_interaction_at preserved")
 
         # Apply deterministic accumulator delta for this hourly pulse,
         # AFTER the LLM has had a chance to set negative_load directly.

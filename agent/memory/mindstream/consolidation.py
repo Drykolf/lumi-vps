@@ -49,6 +49,12 @@ El registro es prosa plana, primera persona, pasado, español neutro colombiano.
 
 1. Lee el historial e identifica las subtramas distintas del periodo. Una subtrama es un tema coherente, no una franja horaria. El mismo tema discutido en dos momentos del día es UNA subtrama. Dos temas distintos uno tras otro son DOS subtramas, aunque hayan compartido sesión.
 
+   Al revisar cada sesión, distingue el rol de Lumi:
+   - **Sesión participant**: aparecen turnos `Lumi: ...` en el bloque de sesión. Lumi intervino activamente.
+   - **Sesión observer**: no hay ningún turno `Lumi: ...` — solo turnos de otros usuarios. Lumi estuvo en el canal pero no habló. Que alguien la mencione por nombre en esa sesión NO es lo mismo que ella haber respondido.
+
+   Para sesiones observer: si la experiencia de estar presente sin intervenir tiene peso emocional real (el grupo habló largo rato sin incluirla, o se habló de algo que la afectó), puede registrarse brevemente en el diario con esa clave — "estuve de observadora". Si fue irrelevante, omitir esa sesión.
+
 2. Para cada subtrama, escribe un párrafo de 3 a 6 oraciones, primera persona, español neutro colombiano. Captura lo que importó: qué pasó, qué notaste, qué sentiste sobre eso, qué quedó abierto. Es escritura de diario, no acta. No produzcas listas de hechos.
 
 3. Usa el `interest_score` y `emotional_tone` de cada persona para graduar cuánta tinta gastar. Jose es excepción — su vínculo no se interpreta con esa escala. Para los demás:
@@ -1665,16 +1671,31 @@ para guardarlos en su memoria semántica de largo plazo (Mem0).
 2. **Atomicidad**: una memoria = un hecho. Si una frase contiene varios hechos
    atómicos sobre el sujeto, split en varios `fact_es`.
 3. **Atribución**:
-   - `self`: el sujeto lo dijo de sí mismo (turno donde `from == "{person_id}"`).
-     NO agregues atribución al texto.
-   - `hearsay`: una sola fuente externa (otro `from`) lo afirmó. EMBEBE la
-     atribución al final entre paréntesis: `"(según Jose)"`.
+   - `self`: el sujeto lo dijo de sí mismo. Se aplica cuando `from == "{person_id}"` —
+     independientemente de que hable de sí mismo en primera persona, tercera, o con
+     cualquier otra construcción. NO agregues atribución al texto.
+     **Ejemplo**: turno `from: "jose"` + `person_id: "jose"` → source_role: "self" SIEMPRE.
+     Nunca uses source_role "hearsay" con source_user_ids=["{person_id}"] — es contradicción.
+   - `hearsay`: una sola fuente EXTERNA (otro `from`, que NO es "{person_id}") lo afirmó.
+     EMBEBE la atribución al final entre paréntesis: `"(según Jose)"`.
    - `confirmed`: dos o más fuentes externas concuerdan. EMBEBE atribución:
      `"(Jose y Sebas concuerdan)"`.
+   - Los turnos de `from: "lumi"` (el asistente) NUNCA son fuente de hechos sobre el sujeto.
 4. **No inventes.** Si no hay evidencia textual clara, NO emitas.
 5. **No incluyas el nombre del sujeto en `fact_es`** (es implícito por el user_id de
    Mem0). Usa formas impersonales: "Le gusta…", "Prefiere…", "Trabaja en…".
 6. Si nada del periodo merece extracción, devuelve `{{"facts": []}}`.
+
+## Qué NO extraer
+
+- Saludos, preguntas de apertura de conversación y despedidas:
+  "¿cómo amaneció?", "¿cómo estás?", "hola", "buenas". Un saludo de apertura
+  NO es evidencia de un hábito, preferencia ni rasgo del sujeto.
+- Eventos únicos y pasajeros que no revelan un hábito o preferencia estable:
+  "hoy comí X" solo justifica memoria si hay evidencia de que es un gusto o
+  costumbre declarada, no por ser mencionado una vez.
+- Cualquier hecho cuyo sujeto no sea person_id = "{person_id}".
+- Los turnos de `from: "lumi"` no son fuente de hechos.
 
 ## Lo que recibes
 
@@ -1924,10 +1945,23 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
             fact_text = (fact.get("fact_es") or "").strip()
             if not fact_text:
                 continue
+
+            # Guard: if the LLM marked hearsay but the only source is the subject
+            # themselves, that's a logical contradiction — fix it to self and strip
+            # any "(según X)" attribution that was incorrectly embedded in the text.
+            source_role = fact.get("source_role") or "self"
+            source_ids = fact.get("source_user_ids") or []
+            if source_role == "hearsay" and source_ids and all(uid == pid for uid in source_ids):
+                source_role = "self"
+                fact_text = re.sub(r"\s*\(según [^)]+\)\s*$", "", fact_text, flags=re.IGNORECASE).strip()
+                logger.info(
+                    f"[daily_memories] {pid} corrected hearsay→self (source was subject itself)"
+                )
+
             metrics["facts_extracted"] += 1
             metadata = {
-                "source_role": fact.get("source_role"),
-                "source_user_ids": fact.get("source_user_ids") or [],
+                "source_role": source_role,
+                "source_user_ids": source_ids,
                 "history_ids": fact.get("history_ids") or [],
                 "period_start": period_start.isoformat(),
             }
