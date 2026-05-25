@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from agent.memory.mindstream.social import get_identifier
+from agent.memory.mindstream.social import get_identifier, add_identifier
 from agent.substrate.logger import get_logger
 
 logger = get_logger("presence.whatsapp")
@@ -165,6 +165,46 @@ def is_phone_jid(jid: str) -> bool:
     return jid.endswith("@s.whatsapp.net")
 
 
+def _sync_sender_lid(data: dict, person_id: str) -> None:
+    """Si el sender tiene un JID @lid (grupos), lo registra como identificador
+    adicional de WhatsApp la primera vez que aparece. Solo se llama cuando
+    person_id ya fue verificado via get_identifier(phone), así que el registro
+    solo ocurre para personas ya conocidas."""
+    key = data.get("key") or {}
+    participant = key.get("participant", "")
+    if not participant or not participant.endswith("@lid"):
+        return
+    lid = normalize_phone(participant)
+    if not lid:
+        return
+    if get_identifier("whatsapp", lid):
+        return
+    try:
+        add_identifier(person_id, "whatsapp", lid, verified=True, notes="lid")
+        logger.info(f"[whatsapp] registered LID {lid} → person_id={person_id}")
+    except Exception as e:
+        logger.warning(f"[whatsapp] failed to register LID {lid}: {e}")
+
+
+def replace_person_mentions(text: str, mentioned_jids: list[str]) -> str:
+    """Reemplaza @<lid_o_telefono> en el texto por @<display_name> para personas
+    conocidas. Usa el mismo normalize_phone que el resto del pipeline."""
+    if not text or not mentioned_jids:
+        return text
+    resolved: dict[str, str] = {}
+    for jid in mentioned_jids:
+        local = normalize_phone(jid)
+        if not local:
+            continue
+        row = get_identifier("whatsapp", local)
+        if row:
+            resolved[local] = row["display_name"]
+    if not resolved:
+        return text
+    pattern = re.compile(r"@(" + "|".join(re.escape(k) for k in resolved) + r")\b")
+    return pattern.sub(lambda m: f"@{resolved[m.group(1)]}", text)
+
+
 def build_metadata(remote_jid: str) -> dict:
     """Construye el metadata que recibe run()."""
     return {
@@ -234,7 +274,10 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
         )
         return Skip("unknown contact")
 
+    _sync_sender_lid(data, row["person_id"])
+
     reply_to, mentions, replied_to_participant = extract_reply_and_mentions(data)
+    text = replace_person_mentions(text, mentions)
     quoted_text = extract_quoted_text(data)
     return InboundMessage(
         person_id=row["person_id"],

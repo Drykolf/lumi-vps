@@ -151,7 +151,6 @@ from agent.presence.conduits.whatsapp_adapter import (
     parse_inbound,
 )
 
-
 @app.post("/v1/chat/whatsapp")
 async def whatsapp_webhook(request: Request):
     try:
@@ -196,7 +195,6 @@ async def create_person(req: CreatePersonRequest, x_api_key: str = Header(...)):
         "status": person["status"],
         "notes": person.get("notes"),
     }
-
 
 @app.post("/v1/map-contact")
 async def map_contact(req: MapContactRequest, x_api_key: str = Header(...)):
