@@ -290,7 +290,7 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
         ],
         max_tokens=4000,
         temperature=0.7,
-        model_group=ModelGroup.LIGHTWEIGHT,
+        model_group=ModelGroup.HEAVYDUTY,
     )
     content = response.get("content", "").strip()
 
@@ -922,7 +922,7 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
             ],
             max_tokens=2000,
             temperature=0.3,
-            model_group=ModelGroup.LIGHTWEIGHT,
+            model_group=ModelGroup.HEAVYDUTY,
         )
     except Exception as e:
         logger.error(f"[interest_consolidation] LLM call failed: {e}")
@@ -1906,8 +1906,27 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
             tier=tier,
         )
 
+        # Tier-based model + thinking selection. Jose gets Kimi + medium
+        # reasoning (biographical depth justifies the cost); high tier gets
+        # Kimi without thinking; mid/negative stay on LIGHTWEIGHT.
+        if tier == "max":
+            tier_model_group = ModelGroup.HEAVYDUTY
+            tier_reasoning_effort = "medium"
+            tier_max_tokens = 8192
+        elif tier == "high":
+            tier_model_group = ModelGroup.HEAVYDUTY
+            tier_reasoning_effort = None
+            tier_max_tokens = 2000
+        else:
+            tier_model_group = ModelGroup.LIGHTWEIGHT
+            tier_reasoning_effort = None
+            tier_max_tokens = 2000
+
         logger.info(
             f"[daily_memories] LLM call {pid} | tier={tier} "
+            f"model_group={tier_model_group.name} "
+            f"reasoning_effort={tier_reasoning_effort} "
+            f"max_tokens={tier_max_tokens} "
             f"sessions={len(sessions_for_person)} mentions={len(mention_rows)}"
         )
 
@@ -1917,9 +1936,10 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
                 ],
-                max_tokens=2000,
+                max_tokens=tier_max_tokens,
                 temperature=0.2,
-                model_group=ModelGroup.LIGHTWEIGHT,
+                model_group=tier_model_group,
+                reasoning_effort=tier_reasoning_effort,
             )
         except Exception as e:
             logger.error(f"[daily_memories] LLM call failed for {pid}: {e}")

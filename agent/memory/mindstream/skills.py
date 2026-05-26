@@ -422,9 +422,10 @@ async def _generate_draft(category: dict, existing_skills: set[str]) -> dict | N
                 {"role": "system", "content": _DRAFT_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
-            max_tokens=3500,
+            max_tokens=8192,
             temperature=0.5,
-            model_group=ModelGroup.MAIN,
+            model_group=ModelGroup.HEAVYDUTY,
+            reasoning_effort="medium",
         )
     except Exception as e:
         logger.error(f"[skills] draft LLM call failed for '{proposed_name}': {e}")
