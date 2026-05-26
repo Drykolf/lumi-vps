@@ -13,6 +13,7 @@ from agent.expression.providers.gemma_4_26b_a4b import Gemma4_26B_A4B
 from agent.expression.providers.mistral import Mistral
 from agent.expression.providers.deepseek import DeepSeek
 from agent.expression.providers.qwen_9b import Qwen9B
+from agent.expression.providers.kimi_k2 import KimiK2
 
 logger = logging.getLogger("llm")
 
@@ -20,6 +21,7 @@ logger = logging.getLogger("llm")
 class ModelGroup(Enum):
     MAIN = "main"
     LIGHTWEIGHT = "lightweight"
+    HEAVYDUTY = "heavyduty"
 
 
 # ── Registries de modelos en orden de prioridad ───────────────────────────────
@@ -35,9 +37,14 @@ _LIGHTWEIGHT_MODELS = [
     Qwen9B(),
 ]
 
+_HEAVYDUTY_MODELS = [
+    KimiK2(),
+]
+
 _MODEL_GROUPS = {
     ModelGroup.MAIN: _MAIN_MODELS,
     ModelGroup.LIGHTWEIGHT: _LIGHTWEIGHT_MODELS,
+    ModelGroup.HEAVYDUTY: _HEAVYDUTY_MODELS,
 }
 
 
