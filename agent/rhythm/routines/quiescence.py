@@ -155,11 +155,21 @@ async def nightly_quiescence() -> None:
                 expected_keys=["entries_written", "period_start", "period_end"],
             )
 
-            # ── Step 7 — daily tasks (stub) ───────────────────────────────
+            # ── Step 7 — skill pattern detection ──────────────────────────
             await _run_step(
                 log,
                 "analyze_daily_tasks",
                 analyze_daily_tasks,
+                expected_keys=[
+                    "skipped",
+                    "skipped_reason",
+                    "read_only",
+                    "turns_analyzed",
+                    "categories_found",
+                    "patterns_crossing_threshold",
+                    "proposals_inserted",
+                    "proposals_skipped_duplicate",
+                ],
             )
         finally:
             log.note("--- run complete ---")
@@ -305,17 +315,35 @@ async def extract_daily_learnings() -> dict:
 # ── Step 7 ─────────────────────────────────────────────────────────────────────
 
 async def analyze_daily_tasks() -> dict | None:
-    #TODO
-    """B5 pending — detect pending tasks mentioned in turns since last
-    successful run and stage them in the `skill_proposals` table.
+    """Detect recurring user-request patterns and stage them in `skill_proposals`.
 
-    Recovery pattern: read period_start from heartbeat_state, filter history
-    by `ts >= period_start`.
+    Despite the historic name (this used to be planned as a task-log feature),
+    the actual implementation focuses on skill-evolution: cluster user turns
+    from the last 14 days into request categories, apply detection thresholds,
+    write draft .md files under `agent/identity/skills/_drafts/`, and insert
+    a `skill_proposals` row per draft for Jose's manual review.
 
-    Expected metrics on implementation:
-      tasks_detected, proposals_inserted
+    See agent/identity/principles/skill_evolution.md (canonical spec) and
+    agent/memory/mindstream/skills.py for the implementation.
+
+    period_start is read from this step's bookmark for consistency with other
+    nightly subs, but the actual data window is fixed at 14 days inside the
+    detector — the bookmark is informational only.
     """
-    return None
+    from agent.memory.mindstream.skills import detect_skill_patterns
+    period_start = await get_last_success("quiescence.analyze_daily_tasks")
+    metrics = await detect_skill_patterns(period_start)
+    logger.info(
+        f"[quiescence] skill_patterns done: "
+        f"turns={metrics['turns_analyzed']} "
+        f"categories={metrics['categories_found']} "
+        f"crossing={metrics['patterns_crossing_threshold']} "
+        f"inserted={metrics['proposals_inserted']} "
+        f"duplicates={metrics['proposals_skipped_duplicate']} "
+        f"read_only={metrics['read_only']} "
+        f"skipped={metrics['skipped']}"
+    )
+    return metrics
 
 
 # ── Removed / migrated ────────────────────────────────────────────────────────

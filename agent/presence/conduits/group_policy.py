@@ -19,7 +19,7 @@ logger = get_logger("presence.group_policy")
 
 Decision = Literal["observe", "engage_main", "confirm_close"]
 
-ENGAGED_TIME_WINDOW_S = int(os.getenv("LUMI_GROUP_ENGAGED_WINDOW_S", "300"))
+ENGAGED_TIME_WINDOW_S = int(os.getenv("LUMI_GROUP_ENGAGED_WINDOW_S", "30"))
 ENGAGED_MESSAGE_WINDOW = int(os.getenv("LUMI_GROUP_ENGAGED_MSG_WINDOW", "5"))
 
 CLOSING_PATTERNS = re.compile(

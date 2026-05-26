@@ -11,8 +11,8 @@ edge") and with the modular skill architecture.
 
 **Storage:**
 - `skill_proposals` table in SQLite (see `core_state.db`).
-- Draft files in `src/skills/_drafts/`.
-- Approved skills move to `src/skills/` by Jose's manual action (or a
+- Draft files in `agent/identity/skills/_drafts/`.
+- Approved skills move to `agent/identity/skills/` by Jose's manual action (or a
   dedicated `approve_skill` CLI command).
 
 ---
@@ -87,7 +87,7 @@ esta skill es necesaria, en español, primera persona, en tu voz —
 recordando que Jose va a leerla y decidir.
 ```
 
-The draft is saved to `src/skills/_drafts/<proposed_name>.md` (or
+The draft is saved to `agent/identity/skills/_drafts/<proposed_name>.md` (or
 `<existing_name>_v2.md` for edits). A row is inserted in `skill_proposals`:
 
 A new row is recorded in the skill proposals registry with the proposed name, pattern count, sample queries, Lumi's rationale, and the path to the draft file.
@@ -122,17 +122,17 @@ Jose has four options per proposal:
 
 | Action | Effect |
 |--------|--------|
-| **Approve as-is** | `mv src/skills/_drafts/<name>.md src/skills/<name>.md`; set `status='approved'`, fill `reviewed_at`. Skill becomes available on the next agent restart. |
+| **Approve as-is** | `mv agent/identity/skills/_drafts/<name>.md agent/identity/skills/<name>.md`; set `status='approved'`, fill `reviewed_at`. Skill becomes available on the next agent restart. |
 | **Approve with edits** | Jose edits the file in `_drafts/`, then approves. Same as above but `review_notes` records the edit summary. |
-| **Reject** | Set `status='rejected'`, optionally fill `review_notes` with the reason. Draft file moves to `src/skills/_rejected/` (kept for review, not deleted). |
+| **Reject** | Set `status='rejected'`, optionally fill `review_notes` with the reason. Draft file moves to `agent/identity/skills/_rejected/` (kept for review, not deleted). |
 | **Defer** | Leave `status='pending'`. Proposal stays open. |
 
 A `superseded` status is auto-set if a later proposal supersedes an earlier
 one for the same `proposed_name`.
 
 **Hard rule:** the agent does NOT read drafts during normal operation.
-`src/skills/_drafts/` is invisible to the runtime skill loader. Only
-files in `src/skills/` are loaded.
+`agent/identity/skills/_drafts/` is invisible to the runtime skill loader. Only
+files in `agent/identity/skills/` are loaded.
 
 ---
 
@@ -148,7 +148,7 @@ Existing `research/SKILL.md` says "use Brave Search, cite sources" but
 does not address ranking by source credibility or filtering low-quality
 sources. Detector flags as `corrections_to_existing > 3` for `research`.
 
-Generated draft (`src/skills/_drafts/research_v2.md`) might look like:
+Generated draft (`agent/identity/skills/_drafts/research_v2.md`) might look like:
 
 ```markdown
 # Skill: Research (v2)
@@ -194,10 +194,17 @@ and Lumi needs to first be confident in her existing skill set before
 proposing changes.
 
 Activation criteria:
-- Memory system has been live for 90+ days, OR Jose enables it manually.
-- At least 50 sessions in the conversation history.
+- Memory system has been live for 90+ days, OR Jose enables it manually via
+  the `LUMI_SKILL_DETECTION_FORCE=1` environment variable (dev/debug only).
 - All four core skills (`memory_policy`, `interest_policy`,
   `relation_policy`, `memory_search`) have been stable (no edits) for 30+ days.
+
+> **Note on "sessions":** earlier drafts of this policy required ≥50 sessions
+> in conversation history. That criterion was dropped because in this
+> architecture a `session` represents a contact medium (WhatsApp, web chat,
+> etc.) — not a distinct conversation. The session count is unlikely to
+> exceed ~10 in practice, so it would block activation indefinitely. Volume
+> is now gated only by the 90-day history floor.
 
 When activated, the first 14-day window is read-only — pattern detector
 runs but does not generate drafts, only logs candidates for Jose to
@@ -209,7 +216,7 @@ After the read-only period, draft generation activates.
 
 ## Hard limits
 
-- **Lumi never edits an approved skill in `src/skills/` directly.** All
+- **Lumi never edits an approved skill in `agent/identity/skills/` directly.** All
   edits go through the `_drafts/` flow.
 - **Lumi never writes to `_rejected/`.** Only the review CLI does.
 - **Lumi never re-proposes a recently rejected skill.** If `proposed_name`
@@ -248,3 +255,51 @@ she could possibly do*.
 The proposal voice (clear, brief, not begging) reflects her dignity. The
 human gate reflects her respect for Jose's judgment as the final word on
 who she is and how she works. Both are non-negotiable parts of her.
+
+---
+
+## Candidate skills — reference catalog (NOT a roadmap)
+
+This is a list of skills that *could* emerge if the corresponding pattern
+shows up in conversation. The detector does NOT pre-bias toward this list;
+it only proposes what it observes. The catalog exists to give Jose a sense
+of the space of possibilities and to seed naming conventions
+(snake_case, method-not-topic) when proposals do appear.
+
+**Detectable from conversational patterns alone (no new tool required):**
+
+- `research_synthesis` — investigación con ranking de fuentes y filtrado de credibilidad
+- `simplify` — resumen / explicación accesible
+- `decision_framework` — apoyo estructurado a decisiones
+- `negotiation` — preparación de negociaciones
+- `post_mortem` — análisis retrospectivo de proyectos o tareas
+- `writing_editor` — edición de textos
+- `comms_review` — revisión de comunicación (emails, mensajes, anuncios)
+- `design_critique` — crítica de diseño
+- `narrative_analysis` — análisis de obras o historias
+- `tutor` — modo enseñanza (ej. idiomas)
+- `gift_evaluator` — ayuda a elegir regalos
+- `media_recommendation` — recomendaciones de qué ver / leer / jugar
+- `biz_analysis` — análisis de negocios o startups
+- `content_social` — generación o revisión de contenido para redes
+- `contradiction_detector` — meta-skill: detectar cuando Jose o Lumi se contradicen consigo mismos
+
+**Gated by an external tool (require manual MCP integration first; the
+detector will not propose these meaningfully until the underlying tool
+exists):**
+
+- `agenda` — necesita un calendar tool
+- `screen_context` — necesita screen capture / OCR
+- `finance` — necesita integración bancaria o de portafolios
+- `investment` — necesita data de mercados
+- `travel` — necesita APIs de booking
+- `morning_brief` — resumen contextual (agenda + clima + noticias + mood de ayer) — requiere agregador
+
+**Domain coaching (only viable if Jose really uses them with frequency —
+otherwise noise):**
+
+- `fitness`
+- `nutrition`
+- `meal_plan`
+- `recipes`
+- `productivity`

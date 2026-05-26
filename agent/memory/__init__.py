@@ -73,6 +73,7 @@ from agent.memory.mindstream.consolidation import (
     update_relations,
     consolidate_daily_memories,
 )
+from agent.memory.mindstream.skills import detect_skill_patterns
 from agent.memory.mindstream.cleanup import cleanup_history, cleanup_mood_logs, cleanup_heartbeat_runs, run_all_cleanups
 from agent.memory.mindstream.mentions import (
     add_mention,
@@ -138,6 +139,7 @@ __all__ = [
     "update_profiles",
     "update_relations",
     "consolidate_daily_memories",
+    "detect_skill_patterns",
     "cleanup_history",
     "cleanup_mood_logs",
     "cleanup_heartbeat_runs",
