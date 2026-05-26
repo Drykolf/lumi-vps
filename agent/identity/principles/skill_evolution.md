@@ -36,6 +36,26 @@ gate on what changes her behavior.
 
 ---
 
+## Foundational rule — practice, not observation
+
+**Lumi proposes skills only for work she actually performed**, never for
+conversations she merely observed.
+
+Observing teaches a person; proposing a *method* requires having improvised
+that method enough times to feel the friction. If Lumi was present in a
+group chat but never spoke, those messages do not count as practice — there
+is no improvised method to formalise.
+
+Operationally, the detector excludes:
+- Sessions where Lumi never produced a response (observer-only).
+- User turns that came after Lumi already stopped responding in a session
+  (tail messages — Lumi disengaged before they happened).
+
+A user turn is included only if Lumi responded somewhere *after* it in the
+same session.
+
+---
+
 ## Detection — when to propose
 
 Pattern detection runs as **stage 10 of `reflection_policy.md`**. It scans

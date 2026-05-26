@@ -1,14 +1,14 @@
 import os
 import logging
-from openai import AsyncOpenAI, RateLimitError
+from openai import AsyncOpenAI
 from agent.expression.providers.base import BaseLLM
 
-logger = logging.getLogger("llm.qwen3_235b_a22b")
+logger = logging.getLogger("llm.qwen3_next_80b_a3b")
 
 
-class Qwen3_235B_A22B(BaseLLM):
+class Qwen3Next80B_A3B(BaseLLM):
 
-    MODEL_ID = "Qwen/Qwen3-235B-A22B-Instruct-2507"
+    MODEL_ID = "Qwen/Qwen3-Next-80B-A3B-Instruct"
 
     def __init__(self):
         self._client = AsyncOpenAI(
@@ -21,6 +21,7 @@ class Qwen3_235B_A22B(BaseLLM):
         return self.MODEL_ID
 
     def _kwargs(self, messages, tool_schemas, max_tokens, stream, temperature, reasoning_effort, prompt_cache_key=None) -> dict:
+        # Qwen3-Next-Instruct no razona — ignora reasoning_effort. Tampoco soporta prompt_cache_key.
         extra_body = {"top_k": 20}
         kwargs = dict(
             model=self.MODEL_ID,

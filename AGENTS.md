@@ -94,8 +94,7 @@ Two model groups with independent fallback chains. All via DeepInfra's OpenAI-co
 ### MAIN group (full conversation, tool use)
 
 1. `Qwen/Qwen3.5-35B-A3B` (primary)
-2. `stepfun-ai/Step-3.5-Flash` (fallback)
-3. `nvidia/NVIDIA-Nemotron-3-Super-120B-A12B` (fallback)
+2. `Qwen/Qwen3-Next-80B-A3B-Instruct` (fallback)
 
 ### LIGHTWEIGHT group (tool check, entity detection, memory extraction — ~200-500 tokens)
 
@@ -108,9 +107,8 @@ Two model groups with independent fallback chains. All via DeepInfra's OpenAI-co
 Each provider builds its own `_kwargs` (in `agent/expression/providers/`). When adding a new model, `extra_body` must match what the provider expects:
 
 - **Qwen** (`Qwen3.5-35B-A3B`, `Qwen3.5-9B`): `extra_body={"top_k": 20, "chat_template_kwargs": {"enable_thinking": bool}}`
-- **Step** (`Step-3.5-Flash`): `extra_body={"reasoning_effort": "none"}` (always)
+- **Qwen3-Next-Instruct** (`Qwen3-Next-80B-A3B-Instruct`): `extra_body={"top_k": 20}` — no razona, ignora `reasoning_effort`
 - **Mistral, DeepSeek**: `extra_body={"reasoning_effort": "none"}` only when `thinking=False`
-- **Nemotron**: no `extra_body` at all
 
 The factory in `agent/expression/synapses.py` iterates model instances with exponential backoff (2 attempts per model: 2^0=1s, 2^1=2s) on `RateLimitError`. Fails over to next model after both attempts exhausted. Raises `RuntimeError("Todos los modelos están saturados.")` if all models fail.
 

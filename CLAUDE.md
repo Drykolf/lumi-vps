@@ -72,7 +72,7 @@ conn = core.get_conn()     # data/core.db
 ### LLM groups
 
 Two groups, both via DeepInfra's OpenAI-compatible API. Each has its own fallback chain:
-- **MAIN** (Qwen3.5-35B → Step-3.5-Flash → Nemotron-120B): full conversation
+- **MAIN** (Gemma-4-26B → Qwen3.5-35B → Qwen3-Next-80B): full conversation
 - **LIGHTWEIGHT** (Mistral-Small → DeepSeek-V4-Flash → Qwen3.5-9B): tool check, entity detection, memory extraction
 
 Each provider class in `agent/expression/providers/` sets model-specific `extra_body` kwargs — see AGENTS.md for the exact keys per provider before adding or modifying a model.

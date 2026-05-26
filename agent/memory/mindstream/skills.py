@@ -36,7 +36,7 @@ from pathlib import Path
 
 from agent.subconscious import core, traces
 from agent.substrate.logger import get_logger
-from agent.memory.episodic import get_history_since
+from agent.memory.episodic import get_history_grouped_by_session
 from agent.expression.synapses import chat, ModelGroup
 
 logger = get_logger("memory.skills")
@@ -271,10 +271,61 @@ def _supersede_pending(name: str) -> int:
 # ── History window ───────────────────────────────────────────────────────────
 
 def _load_window(days: int) -> list[dict]:
-    """User turns from the rolling window. Excludes assistant turns."""
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
-    rows = get_history_since(cutoff, limit=10000)
-    return [r for r in rows if r.get("role") == "user"]
+    """Engaged user turns from the rolling window.
+
+    A user turn is "engaged" when Lumi responded to the conversation that
+    contained it — operationalised as: there exists an assistant turn LATER
+    in the same session (i.e. user history_id < last assistant history_id in
+    that session). This excludes:
+      - Observer sessions: group chats where Lumi was present but never spoke.
+      - Tail messages: user turns that came after Lumi already stopped
+        responding in that session.
+
+    Rationale: a skill formalises a method Lumi has been improvising in
+    practice. Conversations she only watched do not count as practice —
+    you cannot propose a skill for work you never did. See
+    skill_evolution.md (rule: "Lumi develops skills only from work she
+    actually performed, not from observed conversations").
+
+    Returned shape mirrors `get_history_since` rows for downstream code:
+    each dict has `id`, `role`, `content`, `user_id`, `session_id`, `ts`.
+    """
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=days)
+    grouped = get_history_grouped_by_session(cutoff.isoformat(), now.isoformat())
+
+    engaged: list[dict] = []
+    observer_sessions = 0
+    tail_dropped = 0
+
+    for sid, msgs in grouped.items():
+        assistant_ids = [m["history_id"] for m in msgs if m["role"] == "assistant"]
+        if not assistant_ids:
+            observer_sessions += 1
+            continue
+        last_assistant = max(assistant_ids)
+        for m in msgs:
+            if m["role"] != "user":
+                continue
+            if m["history_id"] >= last_assistant:
+                tail_dropped += 1
+                continue
+            engaged.append({
+                "id": m["history_id"],
+                "role": m["role"],
+                "content": m["content"],
+                "user_id": m["user_id"],
+                "session_id": sid,
+                "ts": m["ts"],
+            })
+
+    engaged.sort(key=lambda r: r["id"])
+    logger.info(
+        f"[skills] window load: sessions={len(grouped)} "
+        f"observer_skipped={observer_sessions} "
+        f"tail_dropped={tail_dropped} engaged_user_turns={len(engaged)}"
+    )
+    return engaged
 
 
 # ── LLM passes ───────────────────────────────────────────────────────────────
