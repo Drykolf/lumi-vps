@@ -269,7 +269,7 @@ async def get_tools(x_api_key: str = Header(...)):
 async def test_llm(x_api_key: str = Header(...)):
     verify_key(x_api_key)
     from agent.expression.synapses import test_models
-    return {"results": await test_models(reasoning_effort="none")}
+    return {"results": await test_models(reasoning_effort="low")}
 
 # ── User Profiles ─────────────────────────────────────────────────────────────
 @app.get("/v1/memories/{user_id}")

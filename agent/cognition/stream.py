@@ -299,7 +299,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
             messages.append({"role": "tool", "tool_call_id": "call_1", "content": str(r.get("result", ""))})
 
     full_reply = ""
-    async for chunk in chat_stream(messages, prompt_cache_key=CACHE_KEY_CHAT):
+    async for chunk in chat_stream(messages, prompt_cache_key=CACHE_KEY_CHAT):#,reasoning_effort="low"
         full_reply += chunk
         yield chunk
 

@@ -25,8 +25,8 @@ class ModelGroup(Enum):
 # ── Registries de modelos en orden de prioridad ───────────────────────────────
 _MAIN_MODELS = [
     Gemma4_26B_A4B(),
-    Qwen3_5_35B(),
     Qwen3Next80B_A3B(),
+    Qwen3_5_35B(),
 ]
 
 _LIGHTWEIGHT_MODELS = [
