@@ -4,7 +4,7 @@ Stored in data/traces.db via TracesRepository.
 """
 import sqlite3
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from agent.subconscious import traces
 
 UTC = timezone.utc
@@ -306,3 +306,47 @@ async def read_recent_diary_entries(
         })
 
     return results
+
+
+def get_diary_as_book(days: int = 2) -> str:
+    """Return recent diary entries formatted as dated journal pages.
+
+    Fetches `daily_thread` entries from the last `days` calendar days (UTC),
+    groups them by date, and formats them as plain text pages — one date header
+    per day followed by each entry's summary as a paragraph, ordered
+    chronologically within each day. Returns an empty string when no entries
+    exist in the window.
+
+    Intended for injection into the diary-generation prompt so the model can
+    maintain continuity of voice and avoid repeating topics.
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=days)).isoformat()
+
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT talked_at_ts, topic_label, summary
+           FROM diary
+           WHERE entry_type = 'daily_thread'
+             AND talked_at_ts >= ?
+           ORDER BY talked_at_ts ASC""",
+        (cutoff,),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return ""
+
+    # Group by UTC date string (YYYY-MM-DD).
+    from collections import defaultdict
+    by_date: dict[str, list[str]] = defaultdict(list)
+    for talked_at_raw, topic_label, summary in rows:
+        date_str = talked_at_raw[:10]  # "YYYY-MM-DD"
+        by_date[date_str].append(summary)
+
+    pages: list[str] = []
+    for date_str in sorted(by_date):
+        block = f"{date_str} UTC\n" + "\n\n".join(by_date[date_str])
+        pages.append(block)
+
+    return "\n\n---\n\n".join(pages)

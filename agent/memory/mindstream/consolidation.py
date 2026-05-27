@@ -270,9 +270,18 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
             "victimiza.\n\n"
         )
 
+    from agent.memory.episodic import get_diary_as_book
+    prior_diary = get_diary_as_book(days=2)
+    prior_diary_block = (
+        f"Your diary entries from the past 2 days (for continuity of voice — "
+        f"avoid repeating topics already processed):\n\n{prior_diary}\n\n"
+        if prior_diary else ""
+    )
+
     user_msg = (
         f"Period: {period_start.isoformat()} to {period_end.isoformat()}\n\n"
         f"{honesty_block}"
+        f"{prior_diary_block}"
         f"Conversation turns:\n{turns_text}\n\n"
         f"Mood snapshots:\n{moods_text}\n\n"
         f"People involved:\n{persons_text}"
