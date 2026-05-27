@@ -31,8 +31,8 @@ class KimiK2(BaseLLM):
             temperature=temperature,
             stream=stream,
         )
-        if reasoning_effort and reasoning_effort != "none":
-            kwargs["reasoning_effort"] = reasoning_effort
+        # Always send reasoning_effort — Kimi K2.6 thinks by default if the kwarg is absent.
+        kwargs["reasoning_effort"] = reasoning_effort if (reasoning_effort and reasoning_effort != "none") else "none"
         if extra_body:
             kwargs["extra_body"] = extra_body
         if tool_schemas:
@@ -48,7 +48,10 @@ class KimiK2(BaseLLM):
         cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
         logger.info(f"tokens — prompt: {usage.prompt_tokens} | cached: {cached} | completion: {usage.completion_tokens}")
         msg = response.choices[0].message
-        return {"role": msg.role, "content": msg.content or "", "tool_calls": msg.tool_calls or []}
+        content = msg.content or getattr(msg, "reasoning_content", None) or ""
+        if not msg.content and content:
+            logger.warning(f"[{self.MODEL_ID}] content vacío — usando reasoning_content como fallback ({len(content)} chars)")
+        return {"role": msg.role, "content": content, "tool_calls": msg.tool_calls or []}
 
     async def chat_stream(self, messages, tool_schemas=None, temperature=0.7, reasoning_effort=None, prompt_cache_key=None):
         thinking = reasoning_effort is not None and reasoning_effort != "none"
@@ -78,5 +81,10 @@ class KimiK2(BaseLLM):
             logger.info(f"[{self.MODEL_ID}] reasoning ({len(reasoning_text)} chars): {reasoning_text[:300]}")
         if content_text:
             logger.info(f"[{self.MODEL_ID}] content ({len(content_text)} chars): {content_text[:300]}")
+        elif reasoning_text:
+            # Kimi produced only reasoning with no final content — surface the reasoning so callers
+            # get something rather than silence. Logged as warning so this remains visible.
+            logger.warning(f"[{self.MODEL_ID}] stream sin content — usando reasoning como fallback ({len(reasoning_text)} chars)")
+            yield reasoning_text
         else:
-            logger.warning(f"[{self.MODEL_ID}] stream sin content — reasoning={len(reasoning_text)} chars, reasoning_effort={reasoning_effort}")
+            logger.warning(f"[{self.MODEL_ID}] stream sin content ni reasoning — reasoning_effort={reasoning_effort}")
