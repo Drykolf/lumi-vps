@@ -16,7 +16,7 @@ INSERT OR IGNORE INTO known_persons (
     notes
 ) VALUES (
     'jose',
-    'Jose Barco',
+    'Jose',
     'Jose Barco',
     'jose barco',
     '[

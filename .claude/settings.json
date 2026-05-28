@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 /home/jbarco/lumi-vps/data/traces.db \"SELECT role, user_id, ts, substr\\(content,1,60\\) FROM history WHERE ts >= '2026-05-27T00:00:00' AND ts < '2026-05-28T08:00:00' ORDER BY ts;\")",
+      "Bash(sqlite3 /home/jbarco/lumi-vps/data/traces.db \"SELECT mention_id, created_at, consolidated_at, consolidation_status, resolved_person_id FROM person_mentions ORDER BY consolidated_at DESC LIMIT 15;\")",
+      "Bash(sqlite3 /home/jbarco/lumi-vps/data/core.db \"SELECT task_name, last_success_at FROM heartbeat_state WHERE task_name LIKE 'quiescence.consolidate%' OR task_name LIKE 'quiescence.update%';\")",
+      "Bash(sqlite3 /home/jbarco/lumi-vps/data/traces.db \"SELECT mention_id, consolidated_at FROM person_mentions WHERE consolidation_status='consolidated' ORDER BY consolidated_at ASC LIMIT 5;\")",
+      "Bash(sqlite3 /home/jbarco/lumi-vps/data/traces.db \"SELECT content FROM history WHERE ts = '2026-05-27T19:41:20.911731+00:00' AND role = 'assistant';\")"
+    ]
+  }
+}

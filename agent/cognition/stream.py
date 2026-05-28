@@ -217,6 +217,32 @@ def _get_sid(metadata: dict) -> str:
     return metadata.get("session_id", "default")
 
 
+def _persist_mentions(
+    entities: list[dict],
+    entities_context: list[dict],
+    history_id: int,
+    user_id: str,
+    sid: str,
+) -> None:
+    """Save detected entity mentions + their resolution context to person_mentions."""
+    for i, entity in enumerate(entities):
+        row = add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
+        if not row:
+            continue
+        ctx = entities_context[i] if i < len(entities_context) else None
+        if not ctx:
+            continue
+        try:
+            update_mention_resolution(
+                mention_id=row["mention_id"],
+                status=ctx.get("status", "unknown"),
+                resolved_person_id=ctx.get("person_id"),
+                candidates=_slim_candidates(ctx.get("candidates")),
+            )
+        except Exception as e:
+            logger.warning(f"[finalize] update_mention_resolution failed: {e}")
+
+
 def _finalize_turn(
     user_id: str,
     message: str,
@@ -230,28 +256,11 @@ def _finalize_turn(
 
     touch_last_interaction()
 
-    if not entities:
-        return
-
-    for i, entity in enumerate(entities):
-        row = add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
-        if not row:
-            continue
-        ctx = entities_context[i] if entities_context and i < len(entities_context) else None
-        if not ctx:
-            continue
-        try:
-            update_mention_resolution(
-                mention_id=row["mention_id"],
-                status=ctx.get("status", "unknown"),
-                resolved_person_id=ctx.get("person_id"),
-                candidates=_slim_candidates(ctx.get("candidates")),
-            )
-        except Exception as e:
-            logger.warning(f"[finalize] update_mention_resolution failed: {e}")
-        # mention_count / last_mentioned on known_persons are bumped by the
-        # nightly consolidator (consolidate_entity_mentions). Per-turn we only
-        # persist the raw + resolved mention row.
+    if entities:
+        _persist_mentions(entities, entities_context or [], history_id, user_id, sid)
+    # mention_count / last_mentioned on known_persons are bumped by the
+    # nightly consolidator (consolidate_entity_mentions). Per-turn we only
+    # persist the raw + resolved mention row.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -299,7 +308,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
             messages.append({"role": "tool", "tool_call_id": "call_1", "content": str(r.get("result", ""))})
 
     full_reply = ""
-    async for chunk in chat_stream(messages, prompt_cache_key=CACHE_KEY_CHAT):#reasoning_effort="low",
+    async for chunk in chat_stream(messages,reasoning_effort="low", prompt_cache_key=CACHE_KEY_CHAT):
         full_reply += chunk
         yield chunk
 
@@ -316,3 +325,21 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
     async for chunk in cycle(user_id, message, metadata):
         full += chunk
     return full
+
+
+async def observe_turn(user_id: str, message: str, sid: str) -> None:
+    """Save an observed group-chat message and run lightweight entity extraction.
+
+    Called as a background task for messages LUMI witnessed but did not respond
+    to. Saves the turn to history and detects third-party mentions so the nightly
+    quiescence step 1 can resolve them. The speaker's own evaluation is handled
+    at quiescence time by inspecting history directly (see consolidation.py).
+    """
+    history_id = save_turn(user_id, "user", message, sid)
+    try:
+        entities = await _entities_check(message, sid, user_id)
+        if entities:
+            entities_context = await _resolve_entities(entities, user_id, message)
+            _persist_mentions(entities, entities_context, history_id, user_id, sid)
+    except Exception as e:
+        logger.warning(f"[observe_turn] entity extraction failed: {e}")

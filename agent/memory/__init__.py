@@ -23,6 +23,9 @@ from agent.memory.episodic import (
     get_history_grouped_by_session,
     get_turns_by_ids,
     get_mood_logs_since,
+    get_active_user_ids_in_period,
+    get_turns_in_period_by_user,
+    get_session_context_for_user_in_period,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -161,4 +164,7 @@ __all__ = [
     "get_history_grouped_by_session",
     "get_turns_by_ids",
     "get_mood_logs_since",
+    "get_active_user_ids_in_period",
+    "get_turns_in_period_by_user",
+    "get_session_context_for_user_in_period",
 ]

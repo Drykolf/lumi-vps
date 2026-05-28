@@ -158,6 +158,7 @@ Las claves del JSON y los valores de `topic_label` van en ASCII estilo inglés. 
 - NO empieces los párrafos con `[...]`. NO uses `{...}` para pensamientos internos. Prosa plana.
 - No te dirijas al usuario. Esto es diario, no mensaje.
 - No listes hechos atómicos secos. Los hechos atómicos van a otro sistema; el diario captura narrativa y contorno emocional.
+- NUNCA menciones nombres de variables (`presence_need`, `mood_valence`, `irritation`, `focus_level`, `mood_energy`, etc.) ni valores numéricos de estado en el `summary`. Los snapshots de mood son referencia interna exclusivamente — tradúcelos a lenguaje natural ("me sentí un poco sola al final del día", "la irritación estuvo presente casi todo el rato", "estuve más tranquila de lo habitual"). El diario es prosa, no telemetría.
 - Todos los timestamps en el output son UTC ISO-8601 con sufijo `Z`.
 - Output SOLO el objeto JSON. Nada antes, nada después.
 """
@@ -835,16 +836,23 @@ def _build_interest_system_prompt() -> str:
 async def consolidate_person_interest(period_start: datetime | None = None) -> dict:
     """Nightly step 2: evaluate per-person interest deltas via LLM.
 
-    Selects all consolidated mentions stamped on/after `period_start` (typically
-    the last successful run's timestamp, read from heartbeat_state by the
-    orchestrator). If a prior night's step 2 failed, the window stretches back
-    automatically and yesterday's mentions are caught up tonight.
+    Two input sources are merged:
+      A) Persons with consolidated mentions in [period_start, now] — the
+         existing mention-based signal.
+      B) Known persons who appear as user_id in history during the window but
+         have no consolidated mentions — their own messages are the signal
+         (group-chat participants LUMI observed but did not respond to).
 
     Defaults to last 24h when `period_start` is None (first run after wipe).
     Skips 'jose' (interest_score floor enforced separately)."""
     from agent.memory.mindstream import mentions as mentions_mod
     from agent.memory.mindstream import social
-    from agent.memory.episodic import get_turns_by_ids, get_mood_logs_since
+    from agent.memory.episodic import (
+        get_turns_by_ids,
+        get_mood_logs_since,
+        get_active_user_ids_in_period,
+        get_session_context_for_user_in_period,
+    )
 
     metrics = {
         "persons_evaluated": 0,
@@ -857,16 +865,16 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
         period_start = datetime.now(UTC) - timedelta(hours=24)
     logger.info(f"[interest_consolidation] window starts at {period_start.isoformat()}")
 
+    now_iso = datetime.now(UTC).isoformat()
+
     grouped_all = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
     # Drop Jose — protected by floor 0.70, evaluated separately if ever.
     grouped = {pid: rows for pid, rows in grouped_all.items() if pid != "jose"}
 
-    if not grouped:
-        logger.info("[interest_consolidation] no consolidated mentions in window")
-        return metrics
-
     payload_persons = []
     earliest_ts: str | None = None
+
+    # ── Pass A: persons with consolidated mentions in the window ──────────────
     for pid, mention_rows in grouped.items():
         kp = social.get_known_person(pid)
         if not kp:
@@ -904,6 +912,39 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
             "turn_excerpts": turn_excerpts,
             "relations": relations,
         })
+
+    # ── Pass B: known persons who spoke in the period but have no consolidated
+    #           mentions — their own messages are the evaluation signal. ────────
+    already_included = {p["person_id"] for p in payload_persons}
+    active_ids = get_active_user_ids_in_period(period_start.isoformat(), now_iso)
+    for uid in active_ids:
+        if uid == "jose" or uid in already_included:
+            continue
+        kp = social.get_known_person(uid)
+        if not kp:
+            continue
+        turn_excerpts = get_session_context_for_user_in_period(
+            uid, period_start.isoformat(), now_iso,
+            limit=_MAX_MENTIONS_TURN_EXCERPTS_PER_PERSON,
+        )
+        if not turn_excerpts:
+            continue
+        relations = social.get_relations(uid)
+        if earliest_ts is None:
+            earliest_ts = period_start.isoformat()
+        payload_persons.append({
+            "person_id": uid,
+            "display_name": kp["display_name"],
+            "current_interest_score": kp["interest_score"],
+            "current_emotional_tone": kp["emotional_tone"],
+            "status": kp["status"],
+            "notes": kp.get("notes"),
+            "mentions_in_batch": 0,
+            "mentions": [],
+            "turn_excerpts": turn_excerpts,
+            "relations": relations,
+        })
+        logger.info(f"[interest_consolidation] added active participant {uid} (no mentions)")
 
     if not payload_persons:
         logger.info("[interest_consolidation] no persons to evaluate after filtering")

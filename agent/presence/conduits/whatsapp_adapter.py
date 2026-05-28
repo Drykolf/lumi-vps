@@ -297,7 +297,7 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
 
 # ── Orquestación: dispatch entre 1:1 y grupo ──────────────────────────────────
 
-from agent.cognition.stream import run
+from agent.cognition.stream import run, observe_turn
 from agent.memory import save_turn, get_recent_session_log
 from agent.presence.conduits import group_policy
 from agent.presence.conduits.debounce import DebouncePolicy
@@ -347,14 +347,14 @@ async def _flush_group(messages: list) -> None:
 # ── Handlers de entrada ───────────────────────────────────────────────────────
 
 async def _handle_group(parsed: InboundMessage) -> dict:
+    import asyncio
     decision = group_policy.classify_inbound(
         parsed.remote_jid, parsed, lumi_jids=_lumi_jids()
     )
 
     if decision == "observe":
-        save_turn(
-            parsed.person_id, "user", parsed.text,
-            session_id=parsed.metadata["session_id"],
+        asyncio.create_task(
+            observe_turn(parsed.person_id, parsed.text, parsed.metadata["session_id"])
         )
         return {"status": "observed", "person_id": parsed.person_id}
 

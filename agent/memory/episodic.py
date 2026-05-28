@@ -202,6 +202,85 @@ def get_history_grouped_by_session(start_ts: str, end_ts: str) -> dict[str, list
     return grouped
 
 
+def get_active_user_ids_in_period(period_start: str, period_end: str) -> list[str]:
+    """Distinct non-assistant user_ids that appear in history in [period_start, period_end)."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT DISTINCT user_id FROM history
+           WHERE role = 'user' AND ts >= ? AND ts < ?""",
+        (period_start, period_end),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def get_turns_in_period_by_user(
+    user_id: str,
+    period_start: str,
+    period_end: str,
+    limit: int = 12,
+) -> list[dict]:
+    """History rows for a specific user in [period_start, period_end), most
+    recent `limit` turns, returned in chronological order. Format matches
+    get_turns_by_ids so it can be used as turn_excerpts in consolidation payloads."""
+    conn = traces.get_conn()
+    rows = conn.execute(
+        """SELECT id, user_id, role, content, session_id, ts
+           FROM history
+           WHERE user_id = ? AND ts >= ? AND ts < ?
+           ORDER BY ts DESC LIMIT ?""",
+        (user_id, period_start, period_end, limit),
+    ).fetchall()
+    conn.close()
+    return [
+        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "session_id": r[4], "ts": r[5]}
+        for r in reversed(rows)
+    ]
+
+
+def get_session_context_for_user_in_period(
+    user_id: str,
+    period_start: str,
+    period_end: str,
+    limit: int = 12,
+) -> list[dict]:
+    """Full session context for a user active in [period_start, period_end).
+
+    Finds the sessions the user participated in, then returns up to `limit`
+    turns from those sessions including ALL participants (other users, Lumi)
+    so the LLM has enough context to evaluate the interaction. Returns the
+    most recent `limit` turns, chronologically ordered.
+
+    Use this instead of get_turns_in_period_by_user when context matters —
+    e.g. "sí claro" is meaningless without knowing what was asked.
+    """
+    conn = traces.get_conn()
+    session_rows = conn.execute(
+        """SELECT DISTINCT session_id FROM history
+           WHERE user_id = ? AND ts >= ? AND ts < ?""",
+        (user_id, period_start, period_end),
+    ).fetchall()
+    if not session_rows:
+        conn.close()
+        return []
+
+    sessions = [r[0] for r in session_rows]
+    placeholders = ",".join("?" for _ in sessions)
+    rows = conn.execute(
+        f"""SELECT id, user_id, role, content, session_id, ts
+            FROM history
+            WHERE session_id IN ({placeholders})
+              AND ts >= ? AND ts < ?
+            ORDER BY ts DESC LIMIT ?""",
+        tuple(sessions) + (period_start, period_end, limit),
+    ).fetchall()
+    conn.close()
+    return [
+        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "session_id": r[4], "ts": r[5]}
+        for r in reversed(rows)
+    ]
+
+
 def get_turns_by_ids(history_ids: list[int]) -> list[dict]:
     """Fetch specific history rows by id, chronologically ordered. Empty list
     on empty input."""
