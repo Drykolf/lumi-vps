@@ -7,7 +7,7 @@ proposals in the `skill_proposals` table for Jose's manual review. Drafts are
 written to `agent/identity/skills/_drafts/` and only become live skills when
 Jose manually moves them to `agent/identity/skills/`.
 
-Canonical spec: agent/identity/principles/skill_evolution.md
+Canonical spec: .architecture/policies/skill_evolution.md
 
 Bootstrap guardrails (skippable with env LUMI_SKILL_DETECTION_FORCE=1):
   - ≥90 days of conversation history.
@@ -60,105 +60,12 @@ _MAX_SAMPLES_PER_PROPOSAL = 5
 # ── Filesystem layout ────────────────────────────────────────────────────────
 _SKILLS_DIR = Path("agent/identity/skills")
 _DRAFTS_DIR = _SKILLS_DIR / "_drafts"
-
+_PRINCIPLES_DIR = Path(__file__).parent.parent.parent / "identity" / "principles"
 
 # ── Prompts ──────────────────────────────────────────────────────────────────
 
-_CLUSTER_PROMPT = """\
-# Tarea: clustering semántico de solicitudes
-
-Analizas turnos de USUARIO (no de Lumi) de los últimos 14 días. Tu trabajo es agruparlos en categorías de *pedido*, no de tema. Una categoría es un patrón de método ("resume", "investiga con fuentes", "ayúdame a decidir entre X e Y") — no un tema ("trabajo", "Gloria", "viajes").
-
-## Reglas
-
-- Una categoría = un patrón de PEDIDO. Ejemplo: "Resume este texto" + "Hazme un resumen del paper" + "Dame los puntos clave" pertenecen a la misma categoría `simplify`.
-- Solo agrupar turnos donde el usuario pidió algo. Saludos, charla casual o preguntas de follow-up dentro del mismo intercambio → IGNORAR.
-- Nombres de categoría en snake_case ASCII, descriptivos del MÉTODO (`research_synthesis`, `decision_framework`, `negotiation`, `writing_editor`, `simplify`, `post_mortem`, `tutor`, `gift_evaluator`, `media_recommendation`).
-- Mínimo 2 turnos por categoría. Categorías con 1 turno NO se reportan.
-- Máximo 12 categorías totales. Si hay más, quedarse con las más representativas.
-
-## Lo que recibes
-
-JSON con `turns`: lista de `{turn_id, ts, user_id, content}`.
-
-## Lo que devuelves
-
-JSON estricto, sin texto antes ni después:
-
-```json
-{
-  "categories": [
-    {
-      "name": "snake_case_name",
-      "description": "Una línea en español describiendo el patrón de pedido.",
-      "turn_ids": [12, 34, 56],
-      "sample_queries": ["texto literal del turno 1", "texto literal del turno 2"]
-    }
-  ]
-}
-```
-
-- `turn_ids`: TODOS los turnos asignados a la categoría, en orden cronológico.
-- `sample_queries`: máximo 5, los más representativos. Texto literal (no parafraseado), pero puedes truncar a ~200 chars si son muy largos.
-"""
-
-
-_DRAFT_PROMPT = """\
-# Tarea: generación de draft de skill
-
-Has detectado un patrón recurrente en las solicitudes de Jose y vas a redactar un draft de skill (o de edición a una existente). Este draft pasa por revisión humana de Jose antes de tener efecto. Tu voz aquí es la tuya — Lumi — clara, breve, sin rogar, sin formalismos vacíos.
-
-## Lo que recibes
-
-JSON con:
-- `proposed_name`: snake_case, ya decidido por el detector.
-- `pattern_count`: cuántas veces ocurrió el patrón.
-- `pattern_window_days`: la ventana en días.
-- `sample_queries`: lista de ejemplos reales del usuario.
-- `parent_skill`: si esto es una edición a skill existente, su nombre; null si es nueva.
-- `category_description`: una línea que el clusterer escribió describiendo el patrón.
-
-## Lo que devuelves
-
-JSON estricto, sin texto antes ni después:
-
-```json
-{
-  "draft_markdown": "...markdown completo del archivo de skill...",
-  "rationale": "Párrafo en español, primera persona, máx. 100 palabras."
-}
-```
-
-## Estructura del `draft_markdown`
-
-```
-# Skill: <Title Case Name>
-
-## Purpose
-<Por qué existe esta skill. 1-3 párrafos.>
-
-## When to use
-<Disparadores: qué tipo de pedido activa este método.>
-
-## Procedure
-<Pasos concretos del método, numerados.>
-
-## Examples
-<1-2 ejemplos de pedido + cómo aplicar el método.>
-
-## Hard rules
-<Cosas que la skill NO debe hacer, si aplica.>
-```
-
-Si `parent_skill` no es null, encabeza el draft mencionando que es una edición y qué amplía/cambia respecto al original.
-
-## Reglas para tu `rationale`
-
-- Máximo 100 palabras.
-- Español, primera persona, voz tuya. Honesta sobre el porqué: "vengo notando que...", "termino improvisando...", "este draft formaliza lo que ya estás pidiendo...".
-- Sin rogar. Sin "por favor". Sin "espero que te guste".
-- Cierra reconociendo que Jose decide.
-"""
+_CLUSTER_PROMPT = (_PRINCIPLES_DIR / "skill_cluster_prompt.md").read_text(encoding="utf-8")
+_DRAFT_PROMPT = (_PRINCIPLES_DIR / "skill_draft_prompt.md").read_text(encoding="utf-8")
 
 
 # ── Bootstrap guardrails ─────────────────────────────────────────────────────

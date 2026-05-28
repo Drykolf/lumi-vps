@@ -2,9 +2,11 @@
 
 **Proyecto:** LUMI (Listening Unified Memory Intelligence)
 **Autor del proyecto:** Jose Barco
-**Versión del manual:** 2.5
-**Fecha:** 24 de mayo 2026
+**Versión del manual:** 2.6
+**Fecha:** 28 de mayo 2026
 **Generado por:** Claude Code (actualización de arquitectura)
+
+> **Nota de versión (v2.6):** sincronización con codebase a 28 de mayo 2026. Cambios: (1) grupo MAIN reducido de 5 a **3 modelos** — eliminados Step-3.5-Flash, Qwen3-235B-A22B y Nemotron-120B; (2) nuevo MAIN #2: **Qwen3-Next-80B-A3B-Instruct** (`extra_body: {"top_k": 20}`, `top_p=0.8`, `presence_penalty=1.0`); (3) nuevo grupo **HEAVYDUTY** con **Kimi-K2.6** (`moonshotai/Kimi-K2.6` vía DeepInfra) — usado exclusivamente en nightly step 7 (draft de skills, `reasoning_effort="medium"`); quirk crítico: Kimi piensa por defecto si `reasoning_effort` está ausente — el wrapper siempre lo envía explícito; (4) **scheduler**: el tick de 15 minutos (`rhythm_tick`) está comentado y suspendido; `mood_state_tick` (extraído a `routines/mood_state.py`) ahora corre en **cron cada hora en el minuto 0**; (5) quiescencia nocturna: **los 7 pasos están todos wired** — steps 5 (`consolidate_daily_memories`) y 7 (`analyze_daily_tasks`) implementados; step 7 usa `skills.py`; (6) nuevo módulo `agent/memory/mindstream/skills.py` — skill pattern detection: ventana 14 días, clustering LIGHTWEIGHT, draft generation HEAVYDUTY, guarda propuestas en `skill_proposals` y drafts en `agent/identity/skills/_drafts/`; bootstrap guardrails: ≥90 días de historial + 14 días read-only tras primera activación; (7) nuevo `agent/presence/conduits/debounce.py` — buffer de mensajes entrantes por canal con timer/cap configurable. Se preserva todo el contenido de v2.5 no afectado por estos cambios.
 
 > **Nota de versión (v2.5):** sincronización con codebase a 24 de mayo 2026. Cambios: (1) quiescencia nocturna actualizada de 8 pasos a **7 pasos** (cleanup_memory_tiers movido al ciclo semanal); (2) **5 de 7 pasos ahora wired** — `update_profiles` (step 3) y `update_relations` (step 4) implementados en `consolidation.py` y orquestados desde `quiescence.py`; (3) infraestructura de recuperación automática: `_run_step()` aísla fallos por paso, `get_last_success()` lee bookmark `heartbeat_state` como `period_start` (ventana auto-extensible en fallo); (4) `_build_per_person_context()` — helper compartido pasos 3+4: transcripciones completas de sesiones donde apareció cada persona; (5) `weekly_forgetting` renombrado a `weekly_decay`; (6) schema: columna `known_persons.forgotten_at` añadida; (7) seeds: corregido `daily_maintenance` → `nightly_quiescence`, añadidas 7 filas por-step; (8) firma `consolidate_person_interest` cambiada a `period_start`-based para auto-recovery. Se preserva todo el contenido de v2.4 no afectado por estos cambios.
 
@@ -98,8 +100,9 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 │                                     │         │  ├─ cognition/working_memory.py  Prompt builder│
 │                                     │         │  ├─ cognition/stream.py    Orquestador central │
 │                                     │         │  ├─ expression/synapses.py  LLM factory (5+3)  │
-│                                     │         │  │  MAIN: Gemma4→Qwen35B→Step→Qwen235B→Nemotron│
+│                                     │         │  │  MAIN: Gemma4→Qwen3Next80B→Qwen35B           │
 │                                     │         │  │  LIGHTWEIGHT: Mistral→DeepSeek→Qwen9B       │
+│                                     │         │  │  HEAVYDUTY: Kimi-K2.6 (nightly step 7)      │
 │                                     │         │  └─ Stream de respuesta                        │
 │                                     │         │       │                                        │
 │                                     │         │       ▼                                        │
@@ -113,9 +116,9 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 │                                     │         │  ├─ data/traces.db (historial, diario, sesión) │
 │                                     │         │  └─ data/core.db (estado, personas, relaciones)│
 │                                     │         │  APScheduler (rhythm/heartbeat.py)              │
-│                                     │         │  ├─ 15min tick: mood check + idle decay        │
+│                                     │         │  ├─ hourly (min=0): mood check + idle decay     │
 │                                     │         │  ├─ 7am daily: morning mood reset              │
-│                                     │         │  ├─ 3am nightly: 7-step quiescence (5 wired)   │
+│                                     │         │  ├─ 3am nightly: 7-step quiescence (all wired) │
 │                                     │         │  └─ Mon 4am: weekly cleanup + decay            │
 │                                     │         │                                                │
 │                                     │         │  Canales adicionales (fase 6+):                │
@@ -177,7 +180,7 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 | Decisión | Elección | Razón |
 |---|---|---|---|---|---|
 | Cerebro local vs remoto | **Remoto (VPS)** | Multi-canal, gaming compatible, memoria centralizada |
-| LLM principal | **Gemma4 26B + 4 fallbacks vía DeepInfra** | Cadena de 5 modelos MAIN con exponential backoff. Mejor precio/calidad, tool calling nativo |
+| LLM principal | **Gemma4 26B + 2 fallbacks vía DeepInfra** | Cadena de 3 modelos MAIN + HEAVYDUTY (Kimi K2.6) con exponential backoff. Mejor precio/calidad, tool calling nativo |
 | Fallback sin internet | **Lumi dormida** (sin LLM local) | Coherencia del personaje > disponibilidad parcial |
 | GPU local | **100% para gaming** | No hay inferencia LLM local en ninguna fase |
 | Memoria | **Mem0 + pgvector (Neo4j opcional)** | Mem0 v2.0.0: entity linking nativo en pgvector. Neo4j disponible vía `--profile graph` |
@@ -191,7 +194,7 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 | Filosofía del agente | **Ultra-ligero** | Loop + contexto + herramientas + memoria en `agent/cognition/` |
 | Personalidad en prompt | **Dos markdown files cacheados** | `get_cached_prefix()` carga `lumi_soul.md` + `attitude.md` |
 | Bases de datos | **data/traces.db + data/core.db** | SQLite: historial conversacional, diario, estado interno, personas, relaciones |
-| Scheduler | **APScheduler** | 4 jobs: 15min tick, 7am morning, 3am nightly (7 pasos, 5 wired), Mon 4am weekly |
+| Scheduler | **APScheduler** | 4 jobs: hourly mood tick (cron min=0), 7am morning, 3am nightly (7 pasos, **todos wired**), Mon 4am weekly |
 
 ---
 
@@ -202,20 +205,24 @@ El PC local en Windows 11 se encarga exclusivamente de captura (ASR), reproducci
 **Modelos activos (orden de prioridad con exponential backoff):**
 
 | Prioridad | Modelo | Rol |
-|---|---|---|---|
+|---|---|---|
 | 1 (primario) | **google/gemma-4-26b-a4b** | Uso principal |
-| 2 (fallback) | Qwen/Qwen3.5-35B-A3B | Si Gemma4 está saturado |
-| 3 (fallback) | stepfun-ai/Step-3.5-Flash | Tercera opción |
-| 4 (fallback) | Qwen/Qwen3-235B-A22B-Instruct-2507 | Cuarta opción |
-| 5 (fallback) | nvidia/NVIDIA-Nemotron-3-Super-120B-A12B | Último recurso |
+| 2 (fallback) | **Qwen/Qwen3-Next-80B-A3B-Instruct** | Si Gemma4 está saturado |
+| 3 (fallback) | Qwen/Qwen3.5-35B-A3B | Último recurso MAIN |
 
 **Grupo LIGHTWEIGHT** (tool check, entity detection, memory extraction — ~200-500 tokens):
 
 | Prioridad | Modelo | Rol |
-|---|---|---|---|
+|---|---|---|
 | 1 | mistralai/Mistral-Small-3.2-24B-Instruct-2506 | Primario |
 | 2 | deepseek-ai/DeepSeek-V4-Flash | Fallback |
 | 3 | Qwen/Qwen3.5-9B | Último recurso |
+
+**Grupo HEAVYDUTY** (nightly step 7 — generación de drafts de skills):
+
+| Prioridad | Modelo | Rol |
+|---|---|---|
+| 1 | **moonshotai/Kimi-K2.6** | Único modelo; reasoning_effort="medium" para draft generation |
 
 Todos vía DeepInfra (`DEEPINFRA_API_KEY`, base URL `https://api.deepinfra.com/v1/openai`). La fábrica LLM en `agent/expression/synapses.py` prueba cada modelo en orden, con 2 reintentos por modelo (exponential backoff: 2^attempt segundos). Si todos fallan, lanza `RuntimeError`.
 
@@ -224,12 +231,11 @@ Todos vía DeepInfra (`DEEPINFRA_API_KEY`, base URL `https://api.deepinfra.com/v
 Cada modelo espera parámetros diferentes en `extra_body`. Si se usa el incorrecto, la API falla:
 
 | Modelo | `extra_body` | Nota |
-|---|---|---|---|
+|---|---|---|
 | google/gemma-4-26b-a4b | *(sin `extra_body`)* | No acepta `chat_template_kwargs`; sí acepta `reasoning_effort` como parámetro top-level |
+| Qwen/Qwen3-Next-80B-A3B-Instruct | `{"top_k": 20}` | `top_p=0.8`, `presence_penalty=1.0`; NO acepta `reasoning_effort` ni `prompt_cache_key` |
 | Qwen/Qwen3.5-35B-A3B | `{"top_k": 20, "chat_template_kwargs": {"enable_thinking": bool}}` | Soporta modo thinking |
-| stepfun-ai/Step-3.5-Flash | `{"reasoning_effort": "none"}` | NO acepta `chat_template_kwargs` |
-| Qwen/Qwen3-235B-A22B-Instruct-2507 | `{"top_k": 20}` | Solo `top_k`; esta versión no usa `chat_template_kwargs` |
-| NVIDIA-Nemotron-120B | *(sin `extra_body`)* | No acepta ninguno de los anteriores |
+| moonshotai/Kimi-K2.6 | *(sin `extra_body` dedicado)* | **CRÍTICO**: piensa por defecto si `reasoning_effort` está ausente — el wrapper siempre lo envía explícito como `"none"` (o valor real si se quiere reasoning). Fallback: usa `reasoning_content` si `content` está vacío |
 | mistralai/Mistral-Small-24B | `{"reasoning_effort": "none"}` | Solo cuando `thinking=False` |
 | deepseek-ai/DeepSeek-V4-Flash | `{"reasoning_effort": "none"}` | Solo cuando `thinking=False` |
 | Qwen/Qwen3.5-9B | `{"top_k": 20, "chat_template_kwargs": {"enable_thinking": bool}}` | Misma familia Qwen |
@@ -414,6 +420,7 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 │   ├── presence/
 │   │   ├── app.py                     ← FastAPI entrypoint (root_path="/lumi")
 │   │   └── conduits/
+│   │       ├── debounce.py            ← Generic message buffer (timer/cap per session key)
 │   │       ├── group_policy.py        ← Group channel behavior rules
 │   │       └── whatsapp_adapter.py    ← WhatsApp placeholder adapter
 │   ├── cognition/
@@ -423,14 +430,13 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 │   │   ├── intention.py               ← Tool check (1/turn) + tool registration
 │   │   └── working_memory.py          ← System prompt: cached prefix + dynamic suffix
 │   ├── expression/
-│   │   ├── synapses.py                ← LLM factory: 2 model groups + exponential backoff
+│   │   ├── synapses.py                ← LLM factory: 3 model groups + exponential backoff
 │   │   └── providers/                 ← One class per model (BaseLLM ABC)
 │   │       ├── base.py                ← Abstract BaseLLM
-│   │       ├── qwen3_5_35b.py         ← Qwen3.5-35B-A3B (MAIN #2)
-│   │       ├── step_3_5_flash.py      ← Step-3.5-Flash (MAIN #3)
-│   │       ├── nemotron_super_120b.py ← Nemotron-120B (MAIN #5)
-│   │       ├── qwen3_235b_a22b.py     ← Qwen3-235B-A22B (MAIN #4)
 │   │       ├── gemma_4_26b_a4b.py     ← Gemma4 26B (MAIN #1, primario)
+│   │       ├── qwen3_next_80b_a3b.py  ← Qwen3-Next-80B-A3B-Instruct (MAIN #2)
+│   │       ├── qwen3_5_35b.py         ← Qwen3.5-35B-A3B (MAIN #3)
+│   │       ├── kimi_k2.py             ← Kimi-K2.6 (HEAVYDUTY #1; nightly step 7)
 │   │       ├── mistral.py             ← Mistral Small 24B (LIGHTWEIGHT #1)
 │   │       ├── deepseek.py            ← DeepSeek V4 Flash (LIGHTWEIGHT #2)
 │   │       └── qwen_9b.py             ← Qwen3.5-9B (LIGHTWEIGHT #3)
@@ -450,16 +456,18 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 │   │   └── mindstream/
 │   │       ├── social.py              ← known_persons CRUD, relations, aliases, resolve, deltas, decay
 │   │       ├── mentions.py            ← person_mentions table; get_consolidated_since_grouped_by_person
-│   │       ├── consolidation.py       ← LLM-powered: entity consolidation, interest deltas, update_profiles, update_relations, diary
+│   │       ├── consolidation.py       ← LLM-powered: entity consolidation, interest deltas, update_profiles, update_relations, diary, consolidate_daily_memories
+│   │       ├── skills.py              ← Skill pattern detection (nightly step 7): cluster turns, draft proposals via HEAVYDUTY, insert skill_proposals
 │   │       └── cleanup.py             ← Periodic DB pruning (history, mood_logs, heartbeat_runs)
 │   ├── rhythm/
 │   │   ├── heartbeat.py               ← APScheduler job registration + start
-│   │   ├── cadence.py                 ← Timing constants (15min, 7am, 3am, Mon 4am)
+│   │   ├── cadence.py                 ← Timing constants (MOOD_CHECK_MINUTES=60, 7am, 3am, Mon 4am)
 │   │   ├── state.py                   ← Execution tracker (heartbeat_state / heartbeat_runs); get_last_success() for per-step recovery
 │   │   └── routines/
-│   │       ├── pulse.py               ← 15min tick: mood check + idle decay
+│   │       ├── pulse.py               ← rhythm_tick stub (currently commented out in heartbeat.py — not scheduled)
+│   │       ├── mood_state.py          ← mood_state_tick: cron every hour (minute=0); LLM eval or idle_decay
 │   │       ├── morning.py             ← 7am daily: morning mood regression
-│   │       ├── quiescence.py          ← 3am nightly: 7-step orchestration (5 wired, 2 stubs); _run_step isolation + per-step heartbeat bookmarks
+│   │       ├── quiescence.py          ← 3am nightly: 7-step orchestration (**all 7 wired**); _run_step isolation + per-step bookmarks
 │   │       └── forgetting.py          ← Mon 4am: weekly_decay wired; cleanup_memory_tiers stub (threshold-based, not nightly)
 │   ├── subconscious/                  ← Singleton database access layer
 │   │   ├── __init__.py                ← traces + core singletons + init_databases()
@@ -508,13 +516,14 @@ lumi-vps/                              ← Backend VPS (ESTE repo)
 Los siguientes módulos están diseñados en el manual pero **no implementados aún** en el código:
 
 | Módulo | Fase prevista | Estado |
-|---|---|---|---|
+|---|---|---|
 | `channels/` (adapters) | Fase 6 | No implementado |
 | `mcp_servers/calendar/` | Fase 5-6 | No implementado |
 | `agent/presence/conduits/discord_adapter.py` | Fase 6 | No implementado |
 | `agent/faculties/clipboard_tool.py` | Fase 4+ | Schema registrado como remote, implementación local pendiente |
-| Quiescencia step 5 (`consolidate_daily_memories`) | Fase 4 (Block 5) | Stub — Mem0 metadata pipeline pendiente |
-| Quiescencia step 7 (`analyze_daily_tasks`) | Fase 4 (Block 5) | Stub — `skill_proposals` table pendiente |
+| Quiescencia step 5 (`consolidate_daily_memories`) | Fase 4 | ✅ **Wired** — LLM extraction per-person → Mem0 (subject-centric Modelo C) |
+| Quiescencia step 7 (`analyze_daily_tasks`) | Fase 4 | ✅ **Wired** — `skills.py`: clustering LIGHTWEIGHT + drafts HEAVYDUTY → `skill_proposals`; bootstrap guardrails activos |
+| `agent/identity/skills/_drafts/` | Fase 4 | Directorio auto-creado por `skills.py`; propuestas en revisión manual de Jose |
 | `cleanup_memory_tiers` (weekly) | Fase 4 (Block 5) | Stub en `forgetting.py` — movido del nightly al weekly cycle |
 | Mem0 fact extraction per turn | Fase 4 | `add_memory()` existe pero no se llama desde el agent loop |
 
@@ -581,7 +590,7 @@ async def cycle(user_id, message, metadata):
 
 ### 4.3 Selección de modelo y fallback
 
-La fábrica en `agent/expression/synapses.py` mantiene dos grupos de modelos (`ModelGroup.MAIN` con 5 modelos, `ModelGroup.LIGHTWEIGHT` con 3 modelos). Cada modelo se prueba hasta 2 veces con exponential backoff. Si un modelo falla por rate limit, se pasa al siguiente. Ver sección 3.1 para los detalles de `extra_body` por modelo.
+La fábrica en `agent/expression/synapses.py` mantiene tres grupos de modelos (`ModelGroup.MAIN` con 3 modelos, `ModelGroup.LIGHTWEIGHT` con 3 modelos, `ModelGroup.HEAVYDUTY` con 1 modelo — Kimi K2.6). Cada modelo se prueba hasta 2 veces con exponential backoff. Si un modelo falla por rate limit, se pasa al siguiente. Ver sección 3.1 para los detalles de `extra_body` por modelo.
 
 ### 4.4 Stack técnico del VPS
 
@@ -742,7 +751,7 @@ El prompt debe estructurarse en dos bloques estrictamente separados para maximiz
 ║ [3] Ubicación (fija)                                         ║
 ║ [4] Sleep stage (estable por horas) — drowsy / sleepy        ║
 ║ [5] Diary entries recientes (estable por día, 3am)           ║
-║ [6] Estado interno (actualizado cada ~15min)                  ║
+║ [6] Estado interno (actualizado cada ~60min, cron min=0)      ║
 ║     - mood_valence, mood_energy, irritation, focus_level     ║
 ║     - state_label, state_sentence                            ║
 ║     - emotional_honesty_mode (si activo)                     ║
@@ -785,7 +794,7 @@ def get_cached_prefix() -> str:
 
 async def _build_dynamic_suffix(user_id, message, metadata, entities_context) -> str:
     """Construye la sección variable en orden: estático → estable-horas → 
-    estable-día → cada-15min → por-turno."""
+    estable-día → cada-60min → por-turno."""
     state = get_state()
     now_str = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
     
@@ -803,7 +812,7 @@ async def _build_dynamic_suffix(user_id, message, metadata, entities_context) ->
     diary_block = await _build_diary_suffix(user_id)
     if diary_block: parts.append(diary_block)
     
-    # 4. Estado interno (~15min)
+    # 4. Estado interno (~60min)
     parts.append("[Estado interno] " + state_to_text(state))
     if state.get("emotional_honesty_mode"):
         parts.append("[Modo honestidad emocional] ...")

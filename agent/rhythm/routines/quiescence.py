@@ -323,7 +323,7 @@ async def analyze_daily_tasks() -> dict | None:
     write draft .md files under `agent/identity/skills/_drafts/`, and insert
     a `skill_proposals` row per draft for Jose's manual review.
 
-    See agent/identity/principles/skill_evolution.md (canonical spec) and
+    See .architecture/policies/skill_evolution.md (canonical spec) and
     agent/memory/mindstream/skills.py for the implementation.
 
     period_start is read from this step's bookmark for consistency with other

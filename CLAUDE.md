@@ -71,9 +71,10 @@ conn = core.get_conn()     # data/core.db
 
 ### LLM groups
 
-Two groups, both via DeepInfra's OpenAI-compatible API. Each has its own fallback chain:
-- **MAIN** (Gemma-4-26B → Qwen3.5-35B → Qwen3-Next-80B): full conversation
+Three groups, all via DeepInfra's OpenAI-compatible API. Each has its own fallback chain:
+- **MAIN** (Gemma-4-26B → Qwen3-Next-80B-A3B → Qwen3.5-35B): full conversation
 - **LIGHTWEIGHT** (Mistral-Small → DeepSeek-V4-Flash → Qwen3.5-9B): tool check, entity detection, memory extraction
+- **HEAVYDUTY** (Kimi-K2.6): nightly skill draft generation (step 7 of quiescence); always pass `reasoning_effort` explicitly — Kimi thinks by default if absent
 
 Each provider class in `agent/expression/providers/` sets model-specific `extra_body` kwargs — see AGENTS.md for the exact keys per provider before adding or modifying a model.
 
@@ -92,9 +93,9 @@ Policy docs in `agent/identity/principles/` are **read-only behavioral rule docu
 ### Scheduled jobs (APScheduler)
 
 Four jobs registered at startup (`agent/rhythm/heartbeat.py`), all in COL/UTC-5:
-- **Every 15 min**: mood evaluation, entity detection, idle decay
+- **Every hour (cron minute=0)**: mood evaluation + idle decay (`mood_state_tick` in `routines/mood_state.py`). The 15-min `rhythm_tick` is commented out.
 - **7 AM daily**: morning mood regression toward baseline
-- **3 AM nightly**: quiescence — generates daily diary from conversation history
+- **3 AM nightly**: quiescence — 7-step pipeline, all steps wired (including `consolidate_daily_memories` and skill pattern detection via `skills.py`)
 - **Monday 4 AM**: weekly interest decay
 
 ### Import conventions

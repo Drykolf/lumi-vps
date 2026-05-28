@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
@@ -189,24 +190,8 @@ from agent.expression.synapses import chat, ModelGroup
 
 _CLOSE_TOKEN = re.compile(r"\[\s*CLOSE\s*\]", re.IGNORECASE)
 
-_CLOSING_SYSTEM_PROMPT = (
-    "Eres Lumi en un chat grupal. Acabas de tener una conversación con "
-    "alguien y ahora llega un mensaje nuevo. Decide si ese mensaje cierra la "
-    "conversación contigo o no.\n\n"
-    "REGLAS:\n"
-    "- Si es un cierre claro (agradecimiento, despedida, confirmación final "
-    "tipo 'gracias Lumi', 'listo Lumi', 'chao Lumi', 'ok perfecto Lumi'), "
-    "responde con 1 a 5 palabras naturales y termina tu respuesta con el "
-    "token literal [CLOSE].\n"
-    "- Si el mensaje continúa el tema, hace una nueva pregunta, o introduce "
-    "algo relacionado, responde SÓLO con el token literal [KEEP] (sin nada "
-    "más).\n"
-    "- Si tienes dudas, prefiere [KEEP].\n\n"
-    "Ejemplos:\n"
-    "Mensaje: 'gracias Lumi' → 'con gusto [CLOSE]'\n"
-    "Mensaje: 'listo Lumi, y qué tal el otro juego?' → '[KEEP]'\n"
-    "Mensaje: 'ok Lumi perfecto' → 'cuando quieras [CLOSE]'\n"
-)
+_PRINCIPLES_DIR = Path(__file__).parent.parent.parent / "identity" / "principles"
+_CLOSING_SYSTEM_PROMPT = (_PRINCIPLES_DIR / "group_closing_prompt.md").read_text(encoding="utf-8")
 
 
 async def confirm_closing(
