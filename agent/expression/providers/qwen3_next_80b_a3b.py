@@ -33,6 +33,8 @@ class Qwen3Next80B_A3B(BaseLLM):
             stream=stream,
             extra_body=extra_body,
         )
+        if stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if tool_schemas:
             kwargs["tools"] = tool_schemas
             kwargs["tool_choice"] = "auto"
@@ -42,9 +44,7 @@ class Qwen3Next80B_A3B(BaseLLM):
         response = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, max_tokens, stream=False, temperature=temperature, reasoning_effort=reasoning_effort, prompt_cache_key=prompt_cache_key)
         )
-        usage = response.usage
-        cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
-        logger.info(f"tokens — prompt: {usage.prompt_tokens} | cached: {cached} | completion: {usage.completion_tokens}")
+        self._log_usage(response.usage)
         msg = response.choices[0].message
         return {"role": msg.role, "content": msg.content or "", "tool_calls": msg.tool_calls or []}
 
@@ -52,9 +52,13 @@ class Qwen3Next80B_A3B(BaseLLM):
         stream = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, 512, stream=True, temperature=temperature, reasoning_effort=reasoning_effort, prompt_cache_key=prompt_cache_key)
         )
+        usage = None
         async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
+        self._log_usage(usage, stream=True)

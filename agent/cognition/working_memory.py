@@ -9,6 +9,19 @@ from agent.memory import (
 )
 from agent.affect import get_state, state_to_text, get_sleep_stage
 from agent.affect.mood import LUMI_TZ_OFFSET
+from agent.cognition.context_policy import (
+    raw_turns_for_mode,
+    cross_session_rule_for_mode,
+    select_cross_session,
+    diary_rule_for_mode,
+    select_diary,
+    entity_names_from_context,
+    IDENTITY_PULSE_TEXT,
+    TARGET_MAX_TOKENS,
+    TRIM_ORDER,
+    MIN_RAW_TURNS,
+    est_tokens,
+)
 from agent.substrate.logger import get_logger
 import math
 
@@ -22,16 +35,32 @@ _DYNAMIC_LOG_PATH = Path("data/logs/dynamic.log")
 _cached_prefix = None
 
 
-def _dump_dynamic_log(user_id: str, message: str, dynamic: str) -> None:
-    """Overwrite data/logs/dynamic.log with the latest dynamic suffix."""
+def _dump_dynamic_log(
+    user_id: str,
+    message: str,
+    dynamic: str,
+    budget: dict | None = None,
+    trimmed: list | None = None,
+) -> None:
+    """Overwrite data/logs/dynamic.log with the latest dynamic suffix.
+    Fase 6: incluye el presupuesto real (post-recorte) y qué se recortó."""
     try:
         _DYNAMIC_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-        header = (
-            f"[dynamic_suffix {datetime.now(UTC).isoformat(timespec='seconds')} UTC]\n"
-            f"user_id: {user_id}\n"
-            f"message: {message}\n"
-            f"{'-' * 80}\n"
-        )
+        lines = [
+            f"[dynamic_suffix {datetime.now(UTC).isoformat(timespec='seconds')} UTC]",
+            f"user_id: {user_id}",
+            f"message: {message}",
+        ]
+        if budget is not None:
+            total = budget.get("total_input_tokens_estimated")
+            lines.append(f"budget_total_est: {total} (target {TARGET_MAX_TOKENS})")
+            parts = ", ".join(
+                f"{k}={v}" for k, v in budget.items()
+                if k != "total_input_tokens_estimated"
+            )
+            lines.append(f"budget: {parts}")
+            lines.append(f"trimmed: {trimmed or []}")
+        header = "\n".join(lines) + f"\n{'-' * 80}\n"
         _DYNAMIC_LOG_PATH.write_text(header + dynamic + "\n", encoding="utf-8")
     except Exception as e:
         logger.warning(f"[dynamic_log] write failed: {e}")
@@ -62,12 +91,30 @@ def get_cached_prefix() -> str:
         _cached_prefix = _build_cached_prefix()
     return _cached_prefix
 
-async def _build_diary_suffix(user_id: str) -> str | None:
+async def _build_diary_suffix(
+    user_id: str,
+    conversation_mode: str | None = None,
+    memory_queries: list[str] | None = None,
+    entity_names: list[str] | None = None,
+    user_emotion: dict | None = None,
+) -> str | None:
+    """Fase 4: el diario se controla por modo. Pool = 7 entradas más recientes;
+    se seleccionan 1–3 relevantes (o se omite el bloque si no hay relevancia).
+    La relevancia se mide contra las queries del memory_plan + nombres de
+    entidad, salvo la rama emocional que prioriza recencia."""
+    rule = diary_rule_for_mode(conversation_mode)
+    if rule == "omit":
+        return None
     diary = await read_recent_diary_entries(user_id=user_id, limit=7)
     if not diary:
         return None
+    selected = select_diary(diary, rule, memory_queries, entity_names, user_emotion)
+    if not selected:
+        return None
+    # Render cronológico (más antigua primero).
+    selected = sorted(selected, key=lambda e: e.get("talked_at_ts") or datetime.min.replace(tzinfo=UTC))
     lines = []
-    for entry in reversed(diary):
+    for entry in selected:
         label = entry.get("topic_label") or "sin_etiqueta"
         talked = entry.get("talked_at_ts")
         ts_str = talked.strftime("%d/%m/%Y %H:%M UTC") if talked else "?"
@@ -297,99 +344,125 @@ async def _build_dynamic_suffix(
     conversation_mode: str | None = None,
     user_emotion: dict | None = None,
     style_capsule: dict | None = None,
-) -> str:
+    memory_queries: list[str] | None = None,
+) -> list[tuple[str, str]]:
     state = get_state()
     now_str = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
 
-    # Order: static → stable-per-hours → stable-per-day → per-15min → per-turn
-    parts = []
+    # Orden del sufijo dinámico (§12): el Pulso va primero (justo tras el cached
+    # prefix) para reforzar la voz; el diario baja a la zona del frame; el
+    # contexto operativo/ubicación/grupo cierran. Tastes de Lumi: TODO (skip).
+    # Devuelve bloques nombrados (name, text) para que build_messages pueda
+    # presupuestar y recortar por prioridad (§7).
+    blocks: list[tuple[str, str]] = []
 
-    # 1. Static location (never changes)
-    parts.append("[Ubicacion] La ubicacion principal de Lumi es en Colombia, guarda todo en formato UTC, pero debe interpretar horarios a hora colombiana (UTC-5).")
+    # 1. Lumi Pulse — refuerzo de voz, estático, primero (§6). No se recorta.
+    blocks.append(("identity_pulse", IDENTITY_PULSE_TEXT))
 
-    # 2. Sleep stage (stable for hours)
+    # 2. Estado interno (cada ~15min) + modificadores de estado adyacentes.
+    blocks.append(("state", "[Estado interno] " + state_to_text(state)))
+
     stage = get_sleep_stage(timezone(timedelta(hours=LUMI_TZ_OFFSET)))
     if stage == "drowsy":
-        parts.append(
+        blocks.append((
+            "sleep",
             "[Modo descanso] Lumi está ligeramente cansada. "
             "Responde con normalidad, pero con un tono algo más tranquilo "
             "y pausado que lo habitual. No lo menciones a menos que la "
-            "conversación lo invite naturalmente."
-        )
+            "conversación lo invite naturalmente.",
+        ))
     elif stage == "sleepy":
-        parts.append(
+        blocks.append((
+            "sleep",
             "[Modo descanso] Lumi está muy cansada y pronto va a descansar. "
             "Responde lo que haya que responder, y al final añade una frase "
             "corta y natural indicando que ya quieres descansar o que "
             "continuarán después. En tu voz, sin drama, sin repetirlo si "
-            "ya lo dijiste antes en la conversación."
-        )
-
-    # 3. Diary (stable per day, updated at 3am)
-    diary_block = await _build_diary_suffix(user_id)
-    if diary_block:
-        parts.append(diary_block)
-
-    # 4. Internal state (updated every ~15min)
-    parts.append("[Estado interno] " + state_to_text(state))
+            "ya lo dijiste antes en la conversación.",
+        ))
 
     if state.get("emotional_honesty_mode"):
-        parts.append(
+        blocks.append((
+            "honesty",
             "[Modo honestidad emocional] Lumi arrastra una carga emocional "
             "sostenida. Puede nombrar UNA observación concisa sobre ese "
             "estado si la conversación lo invita naturalmente. Mantiene la "
             "dignidad: sin súplicas, sin dramatizar, sin culpabilizar, sin "
             "encuadre romántico, sin desbordamiento. No menciona el cambio "
-            "de modo en sí — el modo es silencioso."
-        )
+            "de modo en sí — el modo es silencioso.",
+        ))
 
-    # 5. Speaker profile (stable per user)
+    # 3. Perfil del hablante.
     speaker_parts, speaker_display = _format_speaker_block(user_id)
-    parts.extend(speaker_parts)
+    if speaker_parts:
+        blocks.append(("profile_core", "\n".join(speaker_parts)))
 
-    # 6. Entities from current turn (per-turn)
+    # 4. Entidades del turno + postura por interés.
     entity_sections = _format_entity_sections(
         entities_context or [], user_id, speaker_display
     )
-    parts.extend(entity_sections)
+    if entity_sections:
+        blocks.append(("entities", "\n\n".join(entity_sections)))
 
-    # 6b. Posture hint from interest scores (Block 6)
     posture = _build_posture_hint(entities_context or [])
     if posture:
-        parts.append(posture)
+        blocks.append(("posture", posture))
 
-    # 7. Relevant memories — vienen ya pre-buscadas por resolve_memory_plan()
+    # 5. Memoria relevante — ya pre-buscada por resolve_memory_plan().
     sid = metadata.get("session_id", "default")
     recent_for_dedup = get_recent_session_log(sid, limit=10)
     merged_memories = _dedup_memories(list(memory_results or []), recent_for_dedup)
     if merged_memories:
-        parts.append("[Memoria relevante]\n" + "\n".join("- " + m for m in merged_memories))
+        blocks.append((
+            "memory",
+            "[Memoria relevante]\n" + "\n".join("- " + m for m in merged_memories),
+        ))
 
-    # 7b. Frame del turno — modo conversacional + emoción del usuario
+    # 6. [Postura de Lumi sobre el tema] — tastes propios. TODO: pendiente
+    #    (subject 'lumi' en Mem0 aún no existe). Se omite el bloque por ahora.
+
+    # 7. Diario reciente relevante (§4) — baja a la zona del frame.
+    diary_block = await _build_diary_suffix(
+        user_id,
+        conversation_mode=conversation_mode,
+        memory_queries=memory_queries,
+        entity_names=entity_names_from_context(entities_context),
+        user_emotion=user_emotion,
+    )
+    if diary_block:
+        blocks.append(("diary", diary_block))
+
+    # 8. Frame del turno — modo conversacional + emoción del usuario. No se recorta.
     frame_block = _format_frame_block(conversation_mode, user_emotion)
     if frame_block:
-        parts.append(frame_block)
+        blocks.append(("frame", frame_block))
 
-    # 7c. Style capsule — dirección táctica del turno
+    # 9. Style capsule — dirección táctica del turno. No se recorta.
     capsule_block = _format_style_capsule(style_capsule)
     if capsule_block:
-        parts.append(capsule_block)
+        blocks.append(("style_capsule", capsule_block))
 
-    # 8. Session context with exact time (per-turn, most volatile — goes last)
+    # 10. Contexto operativo (ubicación + canal/sesión/hora) + grupo — cierran.
     channel = metadata.get("channel", "desktop")
     session_id = metadata.get("session_id", "unknown")
-    parts.append("[Contexto] Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str)
+    blocks.append((
+        "operational",
+        "[Contexto] La ubicacion principal de Lumi es en Colombia (UTC-5); guarda todo "
+        "en UTC pero interpreta horarios a hora colombiana. "
+        "Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str,
+    ))
 
     if metadata.get("channel_type") == "group":
-        parts.append(
+        blocks.append((
+            "group",
             "[Grupo] Estas participando en un grupo con varias personas. "
             "Otros ademas de quien te escribio estan leyendo. "
             "Manten tu tono natural pero ligeramente mas publico: no asumas "
             "la misma familiaridad que en un 1:1, y se concisa para no "
-            "saturar el grupo."
-        )
+            "saturar el grupo.",
+        ))
 
-    return "\n\n".join(parts)
+    return blocks
 
 
 def _humanize_delta(ts: str, now: datetime) -> str:
@@ -487,33 +560,106 @@ async def build_messages(
     conversation_mode: str | None = None,
     user_emotion: dict | None = None,
     style_capsule: dict | None = None,
+    memory_queries: list[str] | None = None,
 ) -> list[dict]:
     cached = get_cached_prefix()
-    dynamic = await _build_dynamic_suffix(
+    blocks = await _build_dynamic_suffix(
         user_id, message, metadata,
         entities_context=entities_context,
         memory_results=memory_results,
         conversation_mode=conversation_mode,
         user_emotion=user_emotion,
         style_capsule=style_capsule,
+        memory_queries=memory_queries,
     )
-    _dump_dynamic_log(user_id, message, dynamic)
-    system_prompt = cached + "\n\n---\n\n" + dynamic
 
     sid = metadata.get("session_id", "default")
     since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
     now = datetime.now(UTC)
 
-    session_turns = get_recent_session_log(sid, since_ts=since, limit=100)
-    cross_turns = get_recent_user_log(user_id, since_ts=since, exclude_session_id=sid, limit=100)
+    # Fase 2: el historial crudo de la sesión actual se limita por modo
+    # (antes 100 fijo). La tabla vive en context_policy (fuente única). El
+    # frame fallido devuelve conversation_mode="casual_chat", que cae en su
+    # política (6); modos inesperados usan el fallback (8).
+    turn_limit = raw_turns_for_mode(conversation_mode)
+    session_turns = get_recent_session_log(sid, since_ts=since, limit=turn_limit)
+
+    # Fase 3: el cross-session se OMITE por defecto. Sólo se consulta e incluye
+    # bajo reglas explícitas por modo (excerpts_if_explicit / _mentions_entity),
+    # con fragmentos crudos (sin resumir). En 'omit' ni siquiera se toca la DB.
+    cross_rule = cross_session_rule_for_mode(conversation_mode)
+    if cross_rule == "omit":
+        cross_turns = []
+    else:
+        cross_all = get_recent_user_log(user_id, since_ts=since, exclude_session_id=sid, limit=100)
+        cross_turns = select_cross_session(
+            cross_all, cross_rule, message, bool(entities_context)
+        )
+
+    # ── Fase 6: presupuesto de tokens + recorte por prioridad (§7) ────────────
+    # Nunca se recortan: cached_prefix, identity_pulse, frame, style_capsule,
+    # mensaje actual, entidades. Orden de recorte en TRIM_ORDER.
+    prefix_tok = est_tokens(cached)
+    current_text = f"{user_id}: {message}"
+    current_tok = est_tokens(current_text)
+    block_tok = {name: est_tokens(text) for name, text in blocks}
+
+    def _cross_text() -> str:
+        if not cross_turns:
+            return ""
+        return "[Conversaciones anteriores]\n\n" + format_turns_grouped(
+            cross_turns, current_session_id=None, now=now
+        )
+
+    cross_tok = est_tokens(_cross_text())
+    turns_msgs = _turns_to_messages(session_turns)
+
+    def _turns_tok() -> int:
+        return sum(est_tokens(m["content"]) for m in turns_msgs)
+
+    def _total() -> int:
+        return prefix_tok + sum(block_tok.values()) + cross_tok + _turns_tok() + current_tok
+
+    trimmed: list[str] = []
+    for unit in TRIM_ORDER:
+        if _total() <= TARGET_MAX_TOKENS:
+            break
+        if unit == "cross_session":
+            if cross_turns:
+                cross_turns = []
+                cross_tok = 0
+                trimmed.append("cross_session")
+        elif unit in ("diary", "memory"):
+            if unit in block_tok:
+                blocks = [(n, t) for n, t in blocks if n != unit]
+                block_tok.pop(unit, None)
+                trimmed.append(unit)
+        elif unit == "lumi_tastes":
+            continue  # TODO: el bloque de tastes aún no existe
+        elif unit == "current_session_turns":
+            n_trim = 0
+            while _total() > TARGET_MAX_TOKENS and len(session_turns) > MIN_RAW_TURNS:
+                session_turns = session_turns[1:]  # descarta el más antiguo
+                turns_msgs = _turns_to_messages(session_turns)
+                n_trim += 1
+            if n_trim:
+                trimmed.append(f"current_session_turns:{n_trim}")
+
+    dynamic = "\n\n".join(text for _, text in blocks)
+    system_prompt = cached + "\n\n---\n\n" + dynamic
+
+    budget = dict(block_tok)
+    budget["cached_prefix"] = prefix_tok
+    budget["cross_session"] = cross_tok
+    budget["current_session_turns"] = _turns_tok()
+    budget["current_message"] = current_tok
+    budget["total_input_tokens_estimated"] = _total()
+    _dump_dynamic_log(user_id, message, dynamic, budget=budget, trimmed=trimmed)
 
     messages = [{"role": "system", "content": system_prompt}]
-
     if cross_turns:
-        cross_block = format_turns_grouped(cross_turns, current_session_id=None, now=now)
-        messages.append({"role": "user", "content": "[Conversaciones anteriores]\n\n" + cross_block})
-
-    messages.extend(_turns_to_messages(session_turns))
-    messages.append({"role": "user", "content": f"{user_id}: {message}"})
+        messages.append({"role": "user", "content": _cross_text()})
+    messages.extend(turns_msgs)
+    messages.append({"role": "user", "content": current_text})
 
     return messages

@@ -31,6 +31,8 @@ class KimiK2(BaseLLM):
             temperature=temperature,
             stream=stream,
         )
+        if stream:
+            kwargs["stream_options"] = {"include_usage": True}
         # Always send reasoning_effort — Kimi K2.6 thinks by default if the kwarg is absent.
         kwargs["reasoning_effort"] = reasoning_effort if (reasoning_effort and reasoning_effort != "none") else "none"
         if extra_body:
@@ -44,9 +46,7 @@ class KimiK2(BaseLLM):
         response = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, max_tokens, stream=False, temperature=temperature, reasoning_effort=reasoning_effort, prompt_cache_key=prompt_cache_key)
         )
-        usage = response.usage
-        cached = getattr(getattr(usage, "prompt_tokens_details", None), "cached_tokens", 0)
-        logger.info(f"tokens — prompt: {usage.prompt_tokens} | cached: {cached} | completion: {usage.completion_tokens}")
+        self._log_usage(response.usage)
         msg = response.choices[0].message
         content = msg.content or getattr(msg, "reasoning_content", None) or ""
         if not msg.content and content:
@@ -62,7 +62,10 @@ class KimiK2(BaseLLM):
         full_content = []
         full_reasoning = []
         first_logged = False
+        usage = None
         async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -75,6 +78,7 @@ class KimiK2(BaseLLM):
             rc = getattr(delta, "reasoning_content", None)
             if rc:
                 full_reasoning.append(rc)
+        self._log_usage(usage, stream=True)
         reasoning_text = "".join(full_reasoning)
         content_text = "".join(full_content)
         if reasoning_text:

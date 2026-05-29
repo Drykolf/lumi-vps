@@ -35,6 +35,8 @@ class Gemma4_26B_A4B(BaseLLM):
             stream=stream,
             extra_body=extra_body,
         )
+        if stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if tool_schemas:
             kwargs["tools"] = tool_schemas
             kwargs["tool_choice"] = "auto"
@@ -44,6 +46,7 @@ class Gemma4_26B_A4B(BaseLLM):
         response = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, max_tokens, stream=False, temperature=temperature, reasoning_effort=reasoning_effort, prompt_cache_key=prompt_cache_key)
         )
+        self._log_usage(response.usage)
         msg = response.choices[0].message
         return {"role": msg.role, "content": msg.content or "", "tool_calls": msg.tool_calls or []}
 
@@ -56,7 +59,10 @@ class Gemma4_26B_A4B(BaseLLM):
         full_content = []
         full_reasoning = []
         first_logged = False
+        usage = None
         async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -69,6 +75,7 @@ class Gemma4_26B_A4B(BaseLLM):
             rc = getattr(delta, "reasoning_content", None)
             if rc:
                 full_reasoning.append(rc)
+        self._log_usage(usage, stream=True)
         reasoning_text = "".join(full_reasoning)
         content_text = "".join(full_content)
         if reasoning_text:

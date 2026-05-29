@@ -12,6 +12,9 @@ from agent.cognition.memory_plan import resolve_memory_plan
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream
 from agent.cognition.working_memory import build_messages
+from agent.cognition import context_governor
+from agent.cognition.context_pack import build_context_pack
+from agent.cognition.context_policy import memory_queries_from_frame
 from agent.memory import (
     save_turn,
     init_databases,
@@ -219,7 +222,18 @@ async def cycle(user_id: str, message: str, metadata: dict):
         conversation_mode=frame["conversation_mode"],
         user_emotion=frame["user_emotion"],
         style_capsule=frame["style_capsule"],
+        memory_queries=memory_queries_from_frame(frame),
     )
+
+    # Context Governor — SHADOW MODE (Fase 1): no cambia el output, solo loguea.
+    try:
+        pack = await build_context_pack(frame, user_id, message, metadata, entities_context, memory_results)
+        selected = context_governor.select(pack)
+        selected = context_governor.apply_jose_floor(selected, frame, user_id)
+        selected = context_governor.apply_group_overlay(selected, metadata)
+        context_governor.log_governor_shadow(pack, selected, frame)
+    except Exception as e:
+        logger.warning(f"[governor-shadow] {e}")
 
     plan = frame["tool_plan"]
     if plan["needs_tool"] and plan["tool_name"] and isinstance(plan["args"], dict):
@@ -236,7 +250,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
             messages.append({"role": "tool", "tool_call_id": "call_1", "content": str(r.get("result", ""))})
 
     full_reply = ""
-    async for chunk in chat_stream(messages,reasoning_effort="medium", prompt_cache_key=CACHE_KEY_CHAT):
+    async for chunk in chat_stream(messages,prompt_cache_key=CACHE_KEY_CHAT):#reasoning_effort="medium", 
         full_reply += chunk
         yield chunk
 

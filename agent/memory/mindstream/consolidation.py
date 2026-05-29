@@ -245,6 +245,11 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
                 "sampled_at_ts": mood_snapshot[0],
             }
 
+        # TODO (Context Governor / Fase 4): hacer que diary_prompt.md emita
+        # también 3–5 tags de tópico por entrada (p.ej. entry["topics"]) y
+        # persistirlos. El selector de diario (context_policy.select_diary) hoy
+        # hace overlap léxico contra el summary; matchear contra tags sería
+        # mucho más robusto y cuesta casi nada aquí (el LLM ya escribe el summary).
         from agent.memory.episodic import write_diary_entry
         await write_diary_entry(
             period_start=period_start,

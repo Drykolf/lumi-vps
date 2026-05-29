@@ -46,8 +46,7 @@ Debes detectar:
 3. Modo conversacional:
    Debe ser uno de:
    casual_chat, technical_debug, strategic_analysis, emotional_support, social_evaluation,
-   memory_update, current_info_request, tool_request, long_task, boundary_sensitive,
-   group_chat, creative_design.
+   tool_request, boundary_sensitive, creative_design.
 
 4. Plan de herramienta:
    - Decide si hace falta usar una herramienta antes de responder.

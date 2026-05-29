@@ -30,6 +30,8 @@ class Mistral(BaseLLM):
             presence_penalty=1.5,
             stream=stream,
         )
+        if stream:
+            kwargs["stream_options"] = {"include_usage": True}
         if tool_schemas:
             kwargs["tools"] = tool_schemas
             kwargs["tool_choice"] = "auto"
@@ -39,6 +41,7 @@ class Mistral(BaseLLM):
         response = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, max_tokens, stream=False, temperature=temperature, reasoning_effort=reasoning_effort)
         )
+        self._log_usage(response.usage)
         msg = response.choices[0].message
         return {"role": msg.role, "content": msg.content or "", "tool_calls": msg.tool_calls or []}
 
@@ -46,9 +49,13 @@ class Mistral(BaseLLM):
         stream = await self._client.chat.completions.create(
             **self._kwargs(messages, tool_schemas, 512, stream=True, temperature=temperature, reasoning_effort=reasoning_effort)
         )
+        usage = None
         async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
+        self._log_usage(usage, stream=True)
