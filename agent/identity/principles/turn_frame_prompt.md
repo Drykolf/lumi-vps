@@ -19,6 +19,8 @@ Tastes disponibles:
 Debes detectar:
 
 1. Entidades humanas mencionadas:
+   - CRÍTICO: extrae entidades ÚNICAMENTE de la sección "[MENSAJE ACTUAL]". La sección "[CONTEXTO RECIENTE]" sirve solo para desambiguar referencias (resolver "él", "ella", "ese", apodos); NUNCA generes una entidad por algo que solo aparece en el contexto reciente y no en el mensaje actual.
+   - Si la persona ya fue mencionada en turnos previos pero NO vuelve a mencionarse en el mensaje actual, no la incluyas.
    - nombres propios;
    - apodos;
    - nombres compuestos;
@@ -79,7 +81,7 @@ Debes detectar:
    - La capsule debe derivarse del mensaje, modo conversacional, emoción del usuario, entidades, tool_plan y memory_plan.
    - No incluyas hechos inventados.
    - No escribas la respuesta final.
-   - Define `response_goal`, `tone`, `length` (short/medium/long), `directness` (low/medium/high), `warmth` (low/medium/high), `pushback` (none/light_if_needed/strong), `humor` (none/dry_possible/playful), `memory_usage` (skip/use_if_relevant/use_entity_memory_if_available), `suggested_lumi_emotion_tag` (uno de [neutral], [happy], [sad], [thinking], [surprised], [playful]), `avoid` (lista de strings), `special_instruction`.
+   - Define `response_goal`, `tone`, `length` (short/medium/long), `directness` (low/medium/high), `warmth` (low/medium/high), `pushback` (none/light_if_needed/strong), `humor` (none/dry_possible/playful), `memory_usage` (skip/use_if_relevant/use_entity_memory_if_available), `avoid` (lista de strings), `special_instruction`.
    - La style capsule debe ayudar a que Lumi no suene como asistente genérica.
 
 Reglas de salida:
@@ -138,13 +140,12 @@ Schema esperado:
   "style_capsule": {
     "response_goal": "",
     "tone": "neutral",
-    "length": "medium",
-    "directness": "medium",
-    "warmth": "medium",
-    "pushback": "none",
-    "humor": "none",
+    "length": "short",
+    "directness": "high",
+    "warmth": "low",
+    "pushback": "light_if_needed",
+    "humor": "dry_possible",
     "memory_usage": "use_if_relevant",
-    "suggested_lumi_emotion_tag": "[neutral]",
     "avoid": [],
     "special_instruction": ""
   }

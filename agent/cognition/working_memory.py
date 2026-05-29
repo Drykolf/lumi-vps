@@ -275,14 +275,12 @@ def _format_style_capsule(capsule: dict | None) -> str | None:
     warmth = capsule.get("warmth", "medium")
     pushback = capsule.get("pushback", "none")
     humor = capsule.get("humor", "none")
-    tag = capsule.get("suggested_lumi_emotion_tag", "[neutral]")
     avoid = capsule.get("avoid") or []
     special = (capsule.get("special_instruction") or "").strip()
 
     lines = ["[Style capsule]", f"Objetivo: {goal}"]
     lines.append(f"Tono: {tone} | Longitud: {length} | Directness: {directness} | Warmth: {warmth}")
     lines.append(f"Pushback: {pushback} | Humor: {humor}")
-    lines.append(f"Emotion tag sugerido: {tag}")
     if avoid:
         lines.append("Evitar: " + ", ".join(str(a) for a in avoid))
     if special:

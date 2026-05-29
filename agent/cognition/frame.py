@@ -53,13 +53,12 @@ SAFE_FRAME: dict = {
     "style_capsule": {
         "response_goal": "Responder normalmente al usuario con la personalidad base de Lumi.",
         "tone": "neutral",
-        "length": "medium",
-        "directness": "medium",
-        "warmth": "medium",
-        "pushback": "none",
-        "humor": "none",
+        "length": "short",
+        "directness": "high",
+        "warmth": "low",
+        "pushback": "light_if_needed",
+        "humor": "dry_possible",
         "memory_usage": "use_if_relevant",
-        "suggested_lumi_emotion_tag": "[neutral]",
         "avoid": ["sonar como asistente genérica"],
         "special_instruction": "",
     },
@@ -128,11 +127,18 @@ def validate_turn_frame(raw) -> dict:
 
 
 def _build_transcript(sid: str, message: str, user_id: str) -> str:
+    """Build the transcript with prior turns clearly separated from the current
+    message. Entity extraction must run ONLY on the current message; prior turns
+    are context for tool/memory disambiguation only (see turn_frame_prompt.md)."""
     turns = get_recent_session_log(sid, limit=4)
-    out = ""
-    for t in turns:
-        speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)
-        out += f"{speaker}: {t['content']}\n"
+    out = "[CONTEXTO RECIENTE — solo para desambiguar referencias; NO extraigas entidades de aquí]\n"
+    if turns:
+        for t in turns:
+            speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)
+            out += f"{speaker}: {t['content']}\n"
+    else:
+        out += "(sin turnos previos)\n"
+    out += "\n[MENSAJE ACTUAL — extrae entidades SOLO de esta sección]\n"
     out += f"{user_id}: {message}"
     return out
 

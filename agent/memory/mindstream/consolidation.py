@@ -112,14 +112,27 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     ]
     turns_text = format_turns_grouped(history_dicts, current_session_id=None, now=datetime.now(UTC))
 
+    def _q(val: float, lo: float, mid_lo: float, mid_hi: float, hi: float,
+           labels: tuple[str, str, str, str, str]) -> str:
+        if val < lo: return labels[0]
+        if val < mid_lo: return labels[1]
+        if val < mid_hi: return labels[2]
+        if val < hi: return labels[3]
+        return labels[4]
+
     mood_lines = []
     for m in mood_rows:
+        valence_s   = _q(m[1], 0.25, 0.45, 0.60, 0.80, ("bajo", "algo bajo", "neutro", "positivo", "muy positivo"))
+        energy_s    = _q(m[2], 0.25, 0.45, 0.60, 0.80, ("baja", "algo baja", "moderada", "alta", "muy alta"))
+        irrit_s     = _q(m[3], 0.15, 0.35, 0.55, 0.75, ("ninguna", "leve", "moderada", "alta", "muy alta"))
+        focus_s     = _q(m[4], 0.25, 0.45, 0.60, 0.80, ("bajo", "algo bajo", "moderado", "alto", "muy alto"))
+        pneed_s     = _q(m[5], 0.15, 0.35, 0.55, 0.75, ("nula", "leve", "moderada", "alta", "muy alta"))
+        honesty_s   = " | honestidad_emocional: sí" if m[7] else ""
         mood_lines.append(
-            f"[{m[0]}] valence={m[1]:.2f} energy={m[2]:.2f} irritation={m[3]:.2f} "
-            f"focus={m[4]:.2f} presence_need={m[5]:.2f} label={m[6]} "
-            f"honesty_mode={bool(m[7])}"
+            f"[{m[0]}] {m[6]} | ánimo: {valence_s} | energía: {energy_s} | "
+            f"irritación: {irrit_s} | foco: {focus_s} | necesidad_contacto: {pneed_s}{honesty_s}"
         )
-    moods_text = "\n".join(mood_lines) if mood_lines else "(no mood snapshots)"
+    moods_text = "\n".join(mood_lines) if mood_lines else "(sin registros de estado)"
 
     from agent.affect.mood import get_state
     honesty_block = ""
