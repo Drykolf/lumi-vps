@@ -1,16 +1,10 @@
 """
-Intention detection — determines if/what tool is needed and with what arguments.
-Cognition decides intent; faculties execute it.
+Intention module — tool registry facade.
 
-Backward-compat re-exports: register_tool, register_remote, all_schemas, execute.
-New: _tool_check, _formulate_query, decide_tool, has_tool_calls.
+Tool routing y formulación de argumentos viven ahora en agent/cognition/frame.py
+dentro de `turn_frame_check()`. Este módulo sólo expone la API pública del
+registro de tools y el dispatcher.
 """
-import re
-import json
-import logging
-from pathlib import Path
-from agent.expression.synapses import chat, ModelGroup
-from agent.memory import get_recent_session_log
 from agent.faculties.registry import (
     register_tool,
     register_remote,
@@ -21,132 +15,9 @@ from agent.faculties.registry import (
 from agent.faculties.dispatcher import execute
 from agent.faculties.brave_search import BraveSearchTool
 
-logger = logging.getLogger("tools")
-
-_PRINCIPLES_DIR = Path(__file__).parent.parent / "identity" / "principles"
-_TOOL_ROUTING_TEMPLATE = (_PRINCIPLES_DIR / "tool_routing_prompt.md").read_text(encoding="utf-8")
-
 
 def has_tool_calls(message: dict) -> bool:
     return bool(message.get("tool_calls"))
-
-
-# ── Lightweight tool check ─────────────────────────────────────────────────────
-
-async def _tool_check(sid: str, message: str, user_id: str = "user", prompt_cache_key: str | None = None) -> str | None:
-    """Returns tool name if one is needed, None otherwise. ~500 tokens."""
-    all_schemas_ = all_schemas()
-    if not all_schemas_:
-        return None
-
-    tool_lines = []
-    for s in all_schemas_:
-        name = s["function"]["name"]
-        desc = s["function"].get("description", name)
-        tool_lines.append(f"  '{name}': {desc}")
-
-    tools_text = "\n".join(tool_lines)
-
-    turns = get_recent_session_log(sid, limit=6)
-    transcript = ""
-    for t in turns:
-        speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)
-        transcript += f"{speaker}: {t['content']}\n"
-    transcript += f"{user_id}: {message}"
-
-    system_prompt = _TOOL_ROUTING_TEMPLATE.replace("{tools_text}", tools_text)
-    try:
-        response = await chat(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": transcript},
-            ],
-            max_tokens=20,
-            temperature=0.1,
-            reasoning_effort="none",
-            model_group=ModelGroup.LIGHTWEIGHT,
-            prompt_cache_key=prompt_cache_key,
-        )
-        content = response.get("content", "").strip()
-        logger.info(f"[tool_check] response: {content}")
-
-        if content.upper().startswith("SI:"):
-            name = content.split(":", 1)[1].strip()
-            if any(s["function"]["name"] == name for s in all_schemas_):
-                return name
-    except Exception as e:
-        logger.warning(f"[tool_check] failed: {e}")
-    return None
-
-
-async def _formulate_query(message: str, tool_name: str, sid: str, prompt_cache_key: str | None = None) -> dict | None:
-    """Lightweight: generate tool arguments from conversation context. ~200 tokens."""
-    all_schemas_ = all_schemas()
-    schema = next((s for s in all_schemas_ if s["function"]["name"] == tool_name), None)
-    if not schema:
-        return None
-
-    param_props = schema["function"]["parameters"].get("properties", {})
-    param_names = list(param_props.keys())
-
-    # No params needed → execute directly, no LLM call
-    if not param_names:
-        return {}
-
-    # Build tool-biased prompt from schema
-    desc_lines = []
-    for p in param_names:
-        pinfo = param_props[p]
-        desc_lines.append(f"'{p}' ({pinfo.get('type', 'string')}): {pinfo.get('description', p)}")
-
-    turns = get_recent_session_log(sid, limit=6)
-    transcript = ""
-    for t in turns:
-        role = "Jose" if t["role"] == "user" else "Lumi"
-        transcript += f"{role}: {t['content']}\n"
-    transcript += f"Jose: {message}"
-
-    prompt = (
-        f"Genera argumentos para la herramienta '{tool_name}'. "
-        f"Parametros: {'; '.join(desc_lines)}. "
-        f"Responde SOLO con JSON: {{{', '.join(f'\"{p}\": ...' for p in param_names)}}}"
-    )
-
-    try:
-        response = await chat(
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": transcript},
-            ],
-            max_tokens=100,
-            temperature=0.1,
-            reasoning_effort="none",
-            model_group=ModelGroup.LIGHTWEIGHT,
-            prompt_cache_key=prompt_cache_key,
-        )
-        content = response.get("content", "").strip()
-        logger.info(f"[formulate_query] {tool_name} → {content[:100]}")
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            match = re.search(r"\{.*?\}", content, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(0))
-                except json.JSONDecodeError:
-                    pass
-    except Exception as e:
-        logger.warning(f"[formulate_query] failed: {e}")
-    return None
-
-
-async def decide_tool(sid: str, message: str, user_id: str = "user", prompt_cache_key: str | None = None) -> tuple[str | None, dict | None]:
-    """One-stop: check if tool needed + generate args. Returns (tool_name, args)."""
-    tool = await _tool_check(sid, message, user_id=user_id, prompt_cache_key=prompt_cache_key)
-    if tool:
-        args = await _formulate_query(message, tool, sid, prompt_cache_key=prompt_cache_key)
-        return tool, args
-    return None, None
 
 
 # ── Register tools at import time ─────────────────────────────────────────────

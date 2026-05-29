@@ -16,7 +16,7 @@ def add_mention(
     session_id: str,
     source_role: str = "user",
 ) -> dict | None:
-    """Persist one detected entity mention from _entities_check output.
+    """Persist one detected entity mention from turn_frame_check output.
     Returns the inserted row as dict, or None on failure."""
     conn = traces.get_conn()
     now = datetime.now(UTC).isoformat()

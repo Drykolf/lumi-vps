@@ -4,71 +4,28 @@ Core orchestrator — clasificar → handler → contexto → tools → LLM → 
 import asyncio
 import json
 import os
-import re
 from datetime import timezone, timedelta
-from pathlib import Path
 
 from agent.cognition import attention, intention
+from agent.cognition.frame import turn_frame_check
+from agent.cognition.memory_plan import resolve_memory_plan
 from agent.cognition.stimulus import handle_long_task, handle_explicit_save
-from agent.expression.synapses import chat_stream, chat, ModelGroup
+from agent.expression.synapses import chat_stream
 from agent.cognition.working_memory import build_messages
 from agent.memory import (
     save_turn,
     init_databases,
     add_mention,
     update_mention_resolution,
-    get_recent_session_log,
     resolve_person_mention,
     get_known_person,
     get_relations,
-    search_relevant,
 )
 from agent.affect import init_state_table, touch_last_interaction
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.core")
 
-_PRINCIPLES_DIR = Path(__file__).parent.parent / "identity" / "principles"
-_ENTITY_CHECK_PROMPT = (_PRINCIPLES_DIR / "entity_check_prompt.md").read_text(encoding="utf-8")
-
-
-async def _entities_check(message: str, sid: str, user_id: str, prompt_cache_key: str | None = None) -> list[dict]:
-    """Lightweight LLM call to detect third-party entities in user message. ~200 tokens."""
-    default = []
-
-    turns = get_recent_session_log(sid, limit=1)
-    transcript = ""
-    for t in turns:
-        speaker = t["user_id"] if t["role"] == "user" else "Lumi"
-        transcript += f"{speaker}: {t['content']}\n"
-    transcript += f"{user_id}: {message}"
-
-    try:
-        response = await chat(
-            messages=[
-                {"role": "system", "content": _ENTITY_CHECK_PROMPT},
-                {"role": "user", "content": transcript},
-            ],
-            max_tokens=500,
-            temperature=0.1,
-            reasoning_effort="none",
-            model_group=ModelGroup.LIGHTWEIGHT,
-            prompt_cache_key=prompt_cache_key,
-        )
-        content = response.get("content", "").strip()
-        logger.info(f"[entities_check] response: {content}")
-        match = re.search(r"\[.*\]", content, re.DOTALL)
-        if match:
-            entities = json.loads(match.group(0))
-            if not entities:
-                return []
-            for e in entities:
-                logger.info(f"[entities_check] raw_text={e.get('raw_text', '')}")
-            return entities
-        logger.warning("[entities_check] JSON array regex did not match")
-    except Exception as e:
-        logger.warning(f"[entities_check] failed: {e}")
-    return default
 
 def _slim_candidates(candidates: list[dict] | None) -> list[dict]:
     """Trim candidate dicts before persisting to candidates_json (drops nested rows)."""
@@ -85,7 +42,7 @@ def _slim_candidates(candidates: list[dict] | None) -> list[dict]:
     return out
 
 
-async def _resolve_entities(entities: list[dict], user_id: str, message: str) -> list[dict]:
+async def _resolve_entities(entities: list[dict], user_id: str) -> list[dict]:
     """Resolve each detected entity against known_persons and assemble context.
     Returns a list parallel to `entities` used for prompt injection and
     post-turn persistence. Self-mentions (entity resolves to speaker) are kept
@@ -115,7 +72,6 @@ async def _resolve_entities(entities: list[dict], user_id: str, message: str) ->
             "descriptor": entity.get("descriptor"),
             "person": None,
             "relations": [],
-            "scoped_memories": [],
             "is_self_mention": False,
         }
 
@@ -147,15 +103,8 @@ async def _resolve_entities(entities: list[dict], user_id: str, message: str) ->
                     ctx["relations"] = get_relations(pid) or []
                 except Exception as e:
                     logger.warning(f"[resolve] profile/relations fetch failed for {pid}: {e}")
-                try:
-                    # Modelo C: user_id en Mem0 = person_id del sujeto.
-                    # "Qué sé sobre Sosa" => search_relevant(user_id="sosa").
-                    ctx["scoped_memories"] = await search_relevant(
-                        user_id=pid, query=message,
-                        limit=3, min_score=0.5,
-                    )
-                except Exception as e:
-                    logger.warning(f"[resolve] scoped Mem0 failed for {pid}: {e}")
+                # Scoped Mem0 search ahora la hace resolve_memory_plan() según
+                # los entity_scoped_queries del frame.
         elif status == "candidate_unconfirmed" and pid:
             try:
                 ctx["person"] = get_known_person(pid)
@@ -177,8 +126,7 @@ init_state_table()
 logger.info("core orchestrator initialized")
 
 CACHE_KEY_CHAT = os.getenv("PROMPT_CACHE_KEY_CHAT")
-CACHE_KEY_TOOL = os.getenv("PROMPT_CACHE_KEY_TOOL")
-CACHE_KEY_ENTITY = os.getenv("PROMPT_CACHE_KEY_ENTITY")
+CACHE_KEY_FRAME = os.getenv("PROMPT_CACHE_KEY_FRAME")
 
 
 def _get_sid(metadata: dict) -> str:
@@ -242,11 +190,12 @@ async def cycle(user_id: str, message: str, metadata: dict):
         yield "[tired] Zzz..."
         return
 
-    task_type = attention.classify(message)
-    logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
+    #task_type = attention.classify(message)
+    task_type = "chat"
+    #logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
     sid = _get_sid(metadata)
 
-    if task_type == "long_task":
+    """if task_type == "long_task":
         reply = await handle_long_task(user_id, message, sid)
         _finalize_turn(user_id, message, reply, sid)
         yield reply
@@ -256,27 +205,38 @@ async def cycle(user_id: str, message: str, metadata: dict):
         reply = await handle_explicit_save(user_id, message, sid, metadata)
         _finalize_turn(user_id, message, reply, sid)
         yield reply
-        return
+        return"""
 
-    entities = await _entities_check(message, sid, user_id)#, prompt_cache_key=CACHE_KEY_ENTITY)
-    entities_context = await _resolve_entities(entities, user_id, message) if entities else []
+    frame = await turn_frame_check(user_id, message, sid, metadata, prompt_cache_key=CACHE_KEY_FRAME)
+    entities = frame["entities"]
+    entities_context = await _resolve_entities(entities, user_id) if entities else []
     logger.info(f"[entities] detected {len(entities)} entities with context: {[{'raw_text': e.get('raw_text','')[:30], 'status': c.get('status'), 'person_id': c.get('person_id')} for e, c in zip(entities, entities_context)]}")
-    messages = await build_messages(user_id, message, metadata, entities_context=entities_context)
+    memory_results = await resolve_memory_plan(user_id, frame["memory_plan"], entities_context)
+    messages = await build_messages(
+        user_id, message, metadata,
+        entities_context=entities_context,
+        memory_results=memory_results,
+        conversation_mode=frame["conversation_mode"],
+        user_emotion=frame["user_emotion"],
+        style_capsule=frame["style_capsule"],
+    )
 
-    tool, args = await intention.decide_tool(sid, message, user_id=user_id)#, prompt_cache_key=CACHE_KEY_TOOL)
-    if tool and args is not None:
-        tool_call = [{"function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}]
+    plan = frame["tool_plan"]
+    if plan["needs_tool"] and plan["tool_name"] and isinstance(plan["args"], dict):
+        tool_name = plan["tool_name"]
+        args = plan["args"]
+        tool_call = [{"function": {"name": tool_name, "arguments": json.dumps(args, ensure_ascii=False)}}]
         tool_results = await intention.execute(tool_call, user_id)
         messages.append({
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}],
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": tool_name, "arguments": json.dumps(args, ensure_ascii=False)}}],
         })
         for r in tool_results:
             messages.append({"role": "tool", "tool_call_id": "call_1", "content": str(r.get("result", ""))})
 
     full_reply = ""
-    async for chunk in chat_stream(messages,reasoning_effort="low", prompt_cache_key=CACHE_KEY_CHAT):
+    async for chunk in chat_stream(messages,reasoning_effort="medium", prompt_cache_key=CACHE_KEY_CHAT):
         full_reply += chunk
         yield chunk
 
@@ -305,9 +265,10 @@ async def observe_turn(user_id: str, message: str, sid: str) -> None:
     """
     history_id = save_turn(user_id, "user", message, sid)
     try:
-        entities = await _entities_check(message, sid, user_id)
+        frame = await turn_frame_check(user_id, message, sid, metadata={})
+        entities = frame["entities"]
         if entities:
-            entities_context = await _resolve_entities(entities, user_id, message)
+            entities_context = await _resolve_entities(entities, user_id)
             _persist_mentions(entities, entities_context, history_id, user_id, sid)
     except Exception as e:
-        logger.warning(f"[observe_turn] entity extraction failed: {e}")
+        logger.warning(f"[observe_turn] frame check failed: {e}")

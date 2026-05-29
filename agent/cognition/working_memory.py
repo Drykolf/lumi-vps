@@ -3,7 +3,6 @@ from datetime import datetime, timezone, timedelta
 from agent.memory import (
     get_recent_session_log,
     get_recent_user_log,
-    search_relevant,
     read_recent_diary_entries,
     get_known_person,
     ensure_known_person,
@@ -18,8 +17,25 @@ logger = get_logger("agent.context")
 UTC = timezone.utc
 SOUL_PATH = Path(__file__).parent.parent / "identity" / "lumi_soul.md"
 ATTITUDE_PATH = Path(__file__).parent.parent / "identity" / "attitude.md"
+_DYNAMIC_LOG_PATH = Path("data/logs/dynamic.log")
 
 _cached_prefix = None
+
+
+def _dump_dynamic_log(user_id: str, message: str, dynamic: str) -> None:
+    """Overwrite data/logs/dynamic.log with the latest dynamic suffix."""
+    try:
+        _DYNAMIC_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            f"[dynamic_suffix {datetime.now(UTC).isoformat(timespec='seconds')} UTC]\n"
+            f"user_id: {user_id}\n"
+            f"message: {message}\n"
+            f"{'-' * 80}\n"
+        )
+        _DYNAMIC_LOG_PATH.write_text(header + dynamic + "\n", encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"[dynamic_log] write failed: {e}")
+
 
 def _build_cached_prefix() -> str:
     parts = []
@@ -90,15 +106,13 @@ def _format_entity_sections(
     entities_context: list[dict],
     user_id: str,
     speaker_display: str,
-) -> tuple[list[str], list[str]]:
+) -> list[str]:
     """Build per-status formatted sections from resolved entity contexts.
-    Returns (sections, scoped_memories) — sections are joined strings ready to
-    drop into the dynamic suffix; scoped_memories merges into [Memoria relevante]."""
+    Memorias scoped por persona ahora viven en memory_results (resolve_memory_plan)."""
     if not entities_context:
-        return [], []
+        return []
 
     resolved, candidate, ambiguous, unknown = [], [], [], []
-    scoped_memories: list[str] = []
 
     for ctx in entities_context:
         if ctx.get("is_self_mention"):
@@ -106,9 +120,6 @@ def _format_entity_sections(
         status = ctx.get("status")
         if status == "resolved":
             resolved.append(ctx)
-            for m in ctx.get("scoped_memories", []):
-                if m and m not in scoped_memories:
-                    scoped_memories.append(m)
         elif status == "candidate_unconfirmed":
             candidate.append(ctx)
         elif status == "ambiguous":
@@ -125,7 +136,6 @@ def _format_entity_sections(
     )
     resolved = resolved[:3]
     unknown = unknown[:3]
-    scoped_memories = scoped_memories[:3]
 
     sections: list[str] = []
 
@@ -193,7 +203,7 @@ def _format_entity_sections(
             )
         sections.append("\n".join(lines))
 
-    return sections, scoped_memories
+    return sections
 
 
 def _build_posture_hint(entities_context: list[dict]) -> str | None:
@@ -219,16 +229,79 @@ def _build_posture_hint(entities_context: list[dict]) -> str | None:
     return None
 
 
+def _format_frame_block(
+    conversation_mode: str | None,
+    user_emotion: dict | None,
+) -> str | None:
+    """Render [Frame del turno] when the mode is non-default or emotion is non-neutral."""
+    emotion = user_emotion or {}
+    primary = emotion.get("primary", "neutral")
+    intensity = float(emotion.get("intensity") or 0.0)
+    valence = float(emotion.get("valence") or 0.0)
+    needs_ack = bool(emotion.get("needs_acknowledgment"))
+    is_venting = bool(emotion.get("is_venting"))
+    mode = conversation_mode or "casual_chat"
+
+    has_mode = mode and mode != "casual_chat"
+    has_emotion = primary != "neutral" or intensity > 0.2 or needs_ack or is_venting
+    if not (has_mode or has_emotion):
+        return None
+
+    lines = ["[Frame del turno]"]
+    if has_mode:
+        lines.append(f"Modo: {mode}.")
+    if has_emotion:
+        line = f"Emoción del usuario: {primary} (intensidad {intensity:.2f}, valence {valence:+.2f})."
+        if needs_ack:
+            line += " Reconocer antes de resolver."
+        if is_venting:
+            line += " Se está desahogando — no saltar a solución."
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _format_style_capsule(capsule: dict | None) -> str | None:
+    """Render [Style capsule] block. Skips when capsule is the SAFE default
+    (empty response_goal) or None."""
+    if not isinstance(capsule, dict):
+        return None
+    goal = (capsule.get("response_goal") or "").strip()
+    if not goal:
+        return None
+
+    tone = capsule.get("tone", "neutral")
+    length = capsule.get("length", "medium")
+    directness = capsule.get("directness", "medium")
+    warmth = capsule.get("warmth", "medium")
+    pushback = capsule.get("pushback", "none")
+    humor = capsule.get("humor", "none")
+    tag = capsule.get("suggested_lumi_emotion_tag", "[neutral]")
+    avoid = capsule.get("avoid") or []
+    special = (capsule.get("special_instruction") or "").strip()
+
+    lines = ["[Style capsule]", f"Objetivo: {goal}"]
+    lines.append(f"Tono: {tone} | Longitud: {length} | Directness: {directness} | Warmth: {warmth}")
+    lines.append(f"Pushback: {pushback} | Humor: {humor}")
+    lines.append(f"Emotion tag sugerido: {tag}")
+    if avoid:
+        lines.append("Evitar: " + ", ".join(str(a) for a in avoid))
+    if special:
+        lines.append(special)
+    return "\n".join(lines)
+
+
 async def _build_dynamic_suffix(
     user_id: str,
     message: str,
     metadata: dict,
     entities_context: list[dict] | None = None,
+    memory_results: list[str] | None = None,
+    conversation_mode: str | None = None,
+    user_emotion: dict | None = None,
+    style_capsule: dict | None = None,
 ) -> str:
     state = get_state()
     now_str = datetime.now(UTC).strftime("%d/%m/%Y %H:%M UTC")
-
-    relevant_memories = await search_relevant(user_id, message)
 
     # Order: static → stable-per-hours → stable-per-day → per-15min → per-turn
     parts = []
@@ -277,7 +350,7 @@ async def _build_dynamic_suffix(
     parts.extend(speaker_parts)
 
     # 6. Entities from current turn (per-turn)
-    entity_sections, scoped_memories = _format_entity_sections(
+    entity_sections = _format_entity_sections(
         entities_context or [], user_id, speaker_display
     )
     parts.extend(entity_sections)
@@ -287,20 +360,22 @@ async def _build_dynamic_suffix(
     if posture:
         parts.append(posture)
 
-    # 7. Relevant memories (per-turn)
+    # 7. Relevant memories — vienen ya pre-buscadas por resolve_memory_plan()
     sid = metadata.get("session_id", "default")
     recent_for_dedup = get_recent_session_log(sid, limit=10)
-    merged_memories: list[str] = []
-    for m in relevant_memories or []:
-        if m and m not in merged_memories:
-            merged_memories.append(m)
-    for m in scoped_memories:
-        if m and m not in merged_memories:
-            merged_memories.append(m)
-    merged_memories = _dedup_memories(merged_memories, recent_for_dedup)
-
+    merged_memories = _dedup_memories(list(memory_results or []), recent_for_dedup)
     if merged_memories:
         parts.append("[Memoria relevante]\n" + "\n".join("- " + m for m in merged_memories))
+
+    # 7b. Frame del turno — modo conversacional + emoción del usuario
+    frame_block = _format_frame_block(conversation_mode, user_emotion)
+    if frame_block:
+        parts.append(frame_block)
+
+    # 7c. Style capsule — dirección táctica del turno
+    capsule_block = _format_style_capsule(style_capsule)
+    if capsule_block:
+        parts.append(capsule_block)
 
     # 8. Session context with exact time (per-turn, most volatile — goes last)
     channel = metadata.get("channel", "desktop")
@@ -410,9 +485,21 @@ async def build_messages(
     message: str,
     metadata: dict,
     entities_context: list[dict] | None = None,
+    memory_results: list[str] | None = None,
+    conversation_mode: str | None = None,
+    user_emotion: dict | None = None,
+    style_capsule: dict | None = None,
 ) -> list[dict]:
     cached = get_cached_prefix()
-    dynamic = await _build_dynamic_suffix(user_id, message, metadata, entities_context=entities_context)
+    dynamic = await _build_dynamic_suffix(
+        user_id, message, metadata,
+        entities_context=entities_context,
+        memory_results=memory_results,
+        conversation_mode=conversation_mode,
+        user_emotion=user_emotion,
+        style_capsule=style_capsule,
+    )
+    _dump_dynamic_log(user_id, message, dynamic)
     system_prompt = cached + "\n\n---\n\n" + dynamic
 
     sid = metadata.get("session_id", "default")
