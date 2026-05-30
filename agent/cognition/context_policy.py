@@ -66,6 +66,75 @@ def est_tokens(text: str | None) -> int:
     return len(text) // 4
 
 
+# ── Overlays de voz (§9.1 jose_floor + §9.2 group_overlay) ────────────────────
+# Determinísticos, sin LLM. Ajustan el style_capsule y producen notas de prompt.
+# Las escalas usan low/medium/high; el plan habla de "normal" → equivale a "medium".
+
+_WARMTH_SCALE = ["low", "medium", "high"]
+_LENGTH_SCALE = ["short", "medium", "long"]
+
+_OPERATIVE_MODES = {"casual_chat", "technical_debug", "tool_request"}
+
+
+def _clamp_min(value: str, floor: str, scale: list[str]) -> str:
+    try:
+        return value if scale.index(value) >= scale.index(floor) else floor
+    except ValueError:
+        return floor
+
+
+def _clamp_max(value: str, ceil: str, scale: list[str]) -> str:
+    try:
+        return value if scale.index(value) <= scale.index(ceil) else ceil
+    except ValueError:
+        return ceil
+
+
+def apply_voice_overlays(
+    style_capsule: dict | None,
+    speaker_id: str,
+    user_emotion: dict | None,
+    mode: str | None,
+    channel_type: str | None,
+) -> tuple[dict, str | None, str | None]:
+    """Aplica los overlays deterministas al style_capsule.
+
+    Devuelve (style_capsule_ajustado, presence_note, channel_note).
+    NO oculta los tastes de Lumi (decisión de Jose). El control de privacidad en
+    grupo se expresa como texto, no como stripping de memorias."""
+    cap = dict(style_capsule or {})
+    presence_note: str | None = None
+    channel_note: str | None = None
+
+    # jose_floor (§9.1): nunca enfriar a Lumi con Jose por una mala clasificación.
+    if speaker_id == "jose":
+        cap["warmth"] = _clamp_min(cap.get("warmth", "medium"), "medium", _WARMTH_SCALE)
+        ue = user_emotion or {}
+        if (
+            mode in _OPERATIVE_MODES
+            and float(ue.get("intensity") or 0.0) >= 0.6
+            and float(ue.get("valence") or 0.0) <= -0.3
+        ):
+            presence_note = (
+                "[Presencia] Jose llega con una emoción intensa y negativa. "
+                "Reconócela antes de resolver; no saltes directo a lo operativo."
+            )
+
+    # group_overlay (§9.2): expresión contraída + aviso de privacidad (texto).
+    if channel_type == "group":
+        cap["warmth"] = _clamp_max(cap.get("warmth", "medium"), "medium", _WARMTH_SCALE)
+        cap["length"] = _clamp_max(cap.get("length", "medium"), "medium", _LENGTH_SCALE)
+        channel_note = (
+            "[Grupo] Estas participando en un grupo con varias personas; otras "
+            "ademas de quien te escribio estan leyendo. Manten un tono natural "
+            "pero mas publico y conciso, sin asumir la familiaridad de un 1:1. "
+            "Estas en publico: no expongas memorias privadas de Jose ni la "
+            "naturaleza intima del vinculo a menos que se mencionen explicitamente."
+        )
+
+    return cap, presence_note, channel_note
+
+
 def raw_turns_for_mode(mode: str | None) -> int:
     """Cuántos turnos crudos de la sesión actual cargar para un modo dado."""
     if mode and mode in MODE_POLICY:

@@ -13,7 +13,6 @@ from agent.cognition.stimulus import handle_long_task, handle_explicit_save
 from agent.expression.synapses import chat_stream
 from agent.cognition.working_memory import build_messages
 from agent.cognition import context_governor
-from agent.cognition.context_pack import build_context_pack
 from agent.cognition.context_policy import memory_queries_from_frame
 from agent.memory import (
     save_turn,
@@ -225,15 +224,13 @@ async def cycle(user_id: str, message: str, metadata: dict):
         memory_queries=memory_queries_from_frame(frame),
     )
 
-    # Context Governor — SHADOW MODE (Fase 1): no cambia el output, solo loguea.
+    # Frame audit: veredicto del frame por turno para la matriz de confusión.
+    # La selección/recorte real ya la hizo build_messages; el presupuesto real
+    # se loguea en dynamic.log.
     try:
-        pack = await build_context_pack(frame, user_id, message, metadata, entities_context, memory_results)
-        selected = context_governor.select(pack)
-        selected = context_governor.apply_jose_floor(selected, frame, user_id)
-        selected = context_governor.apply_group_overlay(selected, metadata)
-        context_governor.log_governor_shadow(pack, selected, frame)
+        context_governor.log_frame_audit(user_id, message, frame)
     except Exception as e:
-        logger.warning(f"[governor-shadow] {e}")
+        logger.warning(f"[frame-audit] {e}")
 
     plan = frame["tool_plan"]
     if plan["needs_tool"] and plan["tool_name"] and isinstance(plan["args"], dict):

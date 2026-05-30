@@ -16,6 +16,7 @@ from agent.cognition.context_policy import (
     diary_rule_for_mode,
     select_diary,
     entity_names_from_context,
+    apply_voice_overlays,
     IDENTITY_PULSE_TEXT,
     TARGET_MAX_TOKENS,
     TRIM_ORDER,
@@ -437,10 +438,18 @@ async def _build_dynamic_suffix(
     if frame_block:
         blocks.append(("frame", frame_block))
 
-    # 9. Style capsule — dirección táctica del turno. No se recorta.
-    capsule_block = _format_style_capsule(style_capsule)
+    # 9. Style capsule — con overlays deterministas aplicados (jose_floor +
+    #    group_overlay): clamps de warmth/length + notas de presencia/grupo.
+    adj_capsule, presence_note, channel_note = apply_voice_overlays(
+        style_capsule, user_id, user_emotion, conversation_mode,
+        metadata.get("channel_type"),
+    )
+    capsule_block = _format_style_capsule(adj_capsule)
     if capsule_block:
         blocks.append(("style_capsule", capsule_block))
+
+    if presence_note:
+        blocks.append(("presence", presence_note))
 
     # 10. Contexto operativo (ubicación + canal/sesión/hora) + grupo — cierran.
     channel = metadata.get("channel", "desktop")
@@ -452,15 +461,8 @@ async def _build_dynamic_suffix(
         "Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str,
     ))
 
-    if metadata.get("channel_type") == "group":
-        blocks.append((
-            "group",
-            "[Grupo] Estas participando en un grupo con varias personas. "
-            "Otros ademas de quien te escribio estan leyendo. "
-            "Manten tu tono natural pero ligeramente mas publico: no asumas "
-            "la misma familiaridad que en un 1:1, y se concisa para no "
-            "saturar el grupo.",
-        ))
+    if channel_note:
+        blocks.append(("group", channel_note))
 
     return blocks
 
