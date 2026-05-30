@@ -19,7 +19,7 @@ Tastes disponibles:
 Debes detectar:
 
 1. Entidades humanas mencionadas:
-   - CRÍTICO: extrae entidades ÚNICAMENTE de la sección "[MENSAJE ACTUAL]". La sección "[CONTEXTO RECIENTE]" sirve solo para desambiguar referencias (resolver "él", "ella", "ese", apodos); NUNCA generes una entidad por algo que solo aparece en el contexto reciente y no en el mensaje actual.
+   - CRÍTICO: extrae entidades ÚNICAMENTE de la sección "[MENSAJE ACTUAL]". Las secciones "[CONTEXTO RECIENTE]" y "[PERFIL DEL HABLANTE]" sirven solo para desambiguar referencias (resolver "él", "ella", "ese", apodos) y dar contexto base del usuario; NUNCA generes una entidad por algo que solo aparece en esas secciones y no en el mensaje actual. En particular, el nombre del propio hablante en "[PERFIL DEL HABLANTE]" no es una entidad.
    - Si la persona ya fue mencionada en turnos previos pero NO vuelve a mencionarse en el mensaje actual, no la incluyas.
    - nombres propios;
    - apodos;
@@ -60,6 +60,7 @@ Debes detectar:
    - Si dudas entre una herramienta claramente solicitada y NO, usa la herramienta.
    - Si dudas entre una herramienta no relacionada y NO, responde sin herramienta.
    - Si `needs_tool=true`, genera también `args` JSON suficientes para ejecutar la herramienta. Resuelve referencias como "eso", "búscalo", "ese juego" usando el contexto reciente.
+   - Usa "[PERFIL DEL HABLANTE]" para fundamentar `args`. Si la consulta depende de ubicación (clima, lugares cercanos, hora local, eventos locales, comercios) y el usuario no especifica dónde, añade su ubicación al query. Respeta el idioma y las unidades del hablante al construir el query.
    - Si `needs_tool=false`, `tool_name` y `args` deben ser null.
 
 5. Plan de memoria:
@@ -69,6 +70,7 @@ Debes detectar:
    - `entity_scoped_queries`: lista de objetos {entity_ref, query, scope:"person"}, búsquedas sobre personas mencionadas.
    - `relationship_queries`: lista de objetos {query, entities:[...]}, búsquedas sobre relaciones o interacciones entre personas, especialmente cuando el usuario pregunta qué opina Lumi de alguien.
    - No inventes resultados de memoria. Sólo genera queries.
+   - Puedes apoyarte en "[PERFIL DEL HABLANTE]" para hacer las queries más precisas cuando aporte contexto útil.
 
 6. Rules/tastes candidatas:
    - Por ahora son TODO.

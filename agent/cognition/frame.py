@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agent.expression.synapses import chat, ModelGroup
 from agent.faculties.registry import all_schemas
-from agent.memory import get_recent_session_log
+from agent.memory import get_recent_session_log, get_known_person
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.frame")
@@ -126,12 +126,48 @@ def validate_turn_frame(raw) -> dict:
     return frame
 
 
+def _build_speaker_card(user_id: str) -> str:
+    """Render a compact one-line profile card for the speaker from known_persons.
+    Used to ground tool args (e.g. add location to a weather query) and memory
+    queries. Marked as a non-entity-source section. Returns "" if no profile or
+    no usable fields. Best-effort: DB errors never block the frame."""
+    try:
+        person = get_known_person(user_id)
+    except Exception as e:
+        logger.warning(f"[frame] speaker card fetch failed: {e}")
+        return ""
+    if not person:
+        return ""
+
+    display = person.get("display_name") or user_id
+    head = f"{user_id} ({display})" if display != user_id else user_id
+
+    fields = [
+        ("ubicación", person.get("location")),
+        ("zona horaria", person.get("timezone")),
+        ("idioma", person.get("language")),
+        ("unidades", person.get("units")),
+    ]
+    parts = [f"{label}: {val}" for label, val in fields if val]
+    if not parts:
+        return ""
+
+    return (
+        "[PERFIL DEL HABLANTE — contexto base del usuario; NO extraigas entidades de aquí]\n"
+        + head + " | " + " | ".join(parts)
+    )
+
+
 def _build_transcript(sid: str, message: str, user_id: str) -> str:
     """Build the transcript with prior turns clearly separated from the current
     message. Entity extraction must run ONLY on the current message; prior turns
     are context for tool/memory disambiguation only (see turn_frame_prompt.md)."""
+    out = ""
+    card = _build_speaker_card(user_id)
+    if card:
+        out += card + "\n\n"
     turns = get_recent_session_log(sid, limit=4)
-    out = "[CONTEXTO RECIENTE — solo para desambiguar referencias; NO extraigas entidades de aquí]\n"
+    out += "[CONTEXTO RECIENTE — solo para desambiguar referencias; NO extraigas entidades de aquí]\n"
     if turns:
         for t in turns:
             speaker = "Lumi" if t["role"] == "assistant" else (t.get("user_id") or user_id)

@@ -42,6 +42,15 @@ CREATE TABLE IF NOT EXISTS known_persons (
 
     notes TEXT,
 
+    -- Hechos fijos del hablante (contexto base para el frame analyzer).
+    -- Nullable: solo Jose los tiene seedeados; otros quedan NULL.
+    -- NOTA: en DBs ya existentes estas columnas se agregan con ALTER TABLE
+    -- manual (CREATE TABLE IF NOT EXISTS no altera tablas existentes).
+    location TEXT,        -- ej: "Bogotá, Colombia"
+    timezone TEXT,        -- ej: "America/Bogota"
+    language TEXT,        -- ej: "es-CO"
+    units   TEXT,         -- ej: "metric"
+
     CHECK (interest_score >= -1.0 AND interest_score <= 1.0),
     CHECK (emotional_tone IN ('positive', 'neutral', 'negative', 'complex')),
     CHECK (status IN ('active', 'provisional', 'decaying', 'forgotten', 'disliked', 'unknown'))

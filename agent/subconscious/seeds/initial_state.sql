@@ -13,7 +13,11 @@ INSERT OR IGNORE INTO known_persons (
     emotional_tone,
     status,
     mention_count,
-    notes
+    notes,
+    location,
+    timezone,
+    language,
+    units
 ) VALUES (
     'jose',
     'Jose',
@@ -27,7 +31,11 @@ INSERT OR IGNORE INTO known_persons (
     'positive',
     'active',
     1,
-    'Usuario principal de Lumi; prioridad afectiva y contextual máxima.'
+    'Usuario principal de Lumi; prioridad afectiva y contextual máxima.',
+    'Envigado, Colombia',
+    'America/Bogota',
+    'es-CO',
+    'metric'
 );
 
 -- Seed the internal state row with defaults per mood_policy.md §73-87
