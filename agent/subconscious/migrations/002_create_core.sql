@@ -310,3 +310,183 @@ UPDATE lumi_state
 SET data = json_set(data, '$.negative_load', 0.0)
 WHERE key = 'mood_state'
   AND json_extract(data, '$.negative_load') IS NULL;
+
+-- ============================================================
+-- AUTO-EVOLUTION pipeline (manual §2.2)
+-- Forward-looking: estas tablas quedan inertes en el milestone de cimientos
+-- (cargar seeds + inyección). Las llena la fase del pipeline nocturno.
+-- ============================================================
+
+-- Auto-observaciones pasivas (escritas durante el turno, sin costo LLM)
+CREATE TABLE IF NOT EXISTS lumi_self_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT,
+    trace_id INTEGER,
+    category TEXT NOT NULL,
+    content TEXT NOT NULL,
+    emotion_tag TEXT,
+    subject TEXT,
+    consolidated_at TIMESTAMP,
+    pre_candidate_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_self_obs_consolidated ON lumi_self_observations(consolidated_at) WHERE consolidated_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_self_obs_subject ON lumi_self_observations(subject);
+CREATE INDEX IF NOT EXISTS idx_self_obs_ts ON lumi_self_observations(ts DESC);
+
+-- Opinion events — outputs del Opinion Engine
+CREATE TABLE IF NOT EXISTS lumi_opinion_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    session_id TEXT NOT NULL,
+    trace_id INTEGER,
+    user_id TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    stance TEXT NOT NULL
+        CHECK(stance IN ('agrado','desagrado','neutro_curiosidad','no_opina_todavia','no_opina_adversarial')),
+    reason TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    full_response TEXT,
+    triggered_by TEXT,
+    promoted_to_taste BOOLEAN DEFAULT 0,
+    promoted_to_knowledge BOOLEAN DEFAULT 0,
+    promoted_candidate_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_opinion_subject ON lumi_opinion_events(subject);
+CREATE INDEX IF NOT EXISTS idx_opinion_ts ON lumi_opinion_events(ts DESC);
+
+-- Self-Critique raw analyses (auditoría completa)
+CREATE TABLE IF NOT EXISTS lumi_self_critiques (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    evaluation_date DATE NOT NULL,
+    summary TEXT NOT NULL,
+    patterns_identified_json TEXT NOT NULL,
+    performance_recognized_json TEXT,
+    proposed_corrections_json TEXT NOT NULL,
+    corrections_count INTEGER DEFAULT 0,
+    corrections_promoted INTEGER DEFAULT 0,
+    turns_evaluated INTEGER,
+    avg_response_length REAL,
+    emotion_tag_distribution_json TEXT,
+    llm_model_used TEXT,
+    llm_tokens_in INTEGER,
+    llm_tokens_out INTEGER,
+    llm_cost_usd REAL,
+    candidate_ids_generated TEXT,
+    rate_limit_deferred_count INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_self_critique_date ON lumi_self_critiques(evaluation_date DESC);
+CREATE INDEX IF NOT EXISTS idx_self_critique_ts ON lumi_self_critiques(ts DESC);
+
+-- Candidatos extraídos (de las 4 fuentes del harvester)
+CREATE TABLE IF NOT EXISTS lumi_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK(kind IN ('taste','rule','knowledge','skill')),
+    proposal_json TEXT NOT NULL,
+    category TEXT,
+    origin_pathway TEXT NOT NULL DEFAULT 'passive'
+        CHECK(origin_pathway IN ('passive','opinion_engine','self_critique','skill_detection')),
+    source_opinion_event_id INTEGER,
+    source_self_critique_id INTEGER,
+    source_skill_proposal_id INTEGER,
+    evidence_count INTEGER DEFAULT 1,
+    unique_sessions INTEGER DEFAULT 1,
+    unique_days INTEGER DEFAULT 1,
+    score_relevance REAL DEFAULT 0,
+    score_frequency REAL DEFAULT 0,
+    score_diversity REAL DEFAULT 0,
+    score_recency REAL DEFAULT 0,
+    score_consolidation REAL DEFAULT 0,
+    score_richness REAL DEFAULT 0,
+    score_combined REAL DEFAULT 0,
+    score_pathway_boost REAL DEFAULT 0,
+    first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_reinforced TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT DEFAULT 'pending'
+        CHECK(status IN ('pending','promoted','rejected','expired','deferred')),
+    rejection_reason TEXT,
+    promoted_audit_id INTEGER,
+    embedding_hash TEXT,
+    source_traces TEXT,
+    source_observations TEXT,
+    CHECK(score_combined >= 0 AND score_combined <= 1.5)
+);
+CREATE INDEX IF NOT EXISTS idx_candidates_kind_status ON lumi_candidates(kind, status);
+CREATE INDEX IF NOT EXISTS idx_candidates_score ON lumi_candidates(score_combined DESC);
+CREATE INDEX IF NOT EXISTS idx_candidates_pathway ON lumi_candidates(origin_pathway);
+
+-- Audit log de mutaciones (patch + firma + gates + rollback)
+CREATE TABLE IF NOT EXISTS lumi_self_evolution_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    target_file TEXT NOT NULL,
+    candidate_id INTEGER,
+    patch_json TEXT NOT NULL,
+    signature_hmac TEXT NOT NULL,
+    gates_passed_json TEXT NOT NULL,
+    constitutional_verdict_json TEXT,
+    regression_result_json TEXT,
+    applied BOOLEAN DEFAULT 0,
+    rolled_back BOOLEAN DEFAULT 0,
+    rollback_reason TEXT,
+    pre_snapshot_path TEXT,
+    post_snapshot_path TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON lumi_self_evolution_audit(ts DESC);
+
+-- Baseline de personalidad (drift detection)
+CREATE TABLE IF NOT EXISTS lumi_personality_baseline (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_id TEXT UNIQUE NOT NULL,
+    prompt_text TEXT NOT NULL,
+    baseline_response TEXT NOT NULL,
+    baseline_embedding BLOB NOT NULL,
+    baseline_emotion_tag TEXT,
+    baseline_length_chars INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS lumi_drift_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    measured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    prompt_id TEXT NOT NULL,
+    current_response TEXT,
+    cosine_similarity REAL,
+    emotion_tag_matched BOOLEAN,
+    length_delta_pct REAL,
+    passed BOOLEAN,
+    FOREIGN KEY (prompt_id) REFERENCES lumi_personality_baseline(prompt_id)
+);
+
+-- Métricas agregadas del pipeline
+CREATE TABLE IF NOT EXISTS lumi_evolution_metrics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    measured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    observations_logged_24h INTEGER,
+    opinion_events_24h INTEGER,
+    self_critique_run BOOLEAN DEFAULT 0,
+    self_critique_corrections INTEGER DEFAULT 0,
+    candidates_generated INTEGER,
+    candidates_from_passive INTEGER,
+    candidates_from_opinion INTEGER,
+    candidates_from_self_critique INTEGER,
+    candidates_from_skill_detection INTEGER,
+    candidates_promoted INTEGER,
+    rejection_by_score INTEGER,
+    rejection_by_evidence INTEGER,
+    rejection_by_constitutional INTEGER,
+    rejection_by_contradiction INTEGER,
+    rejection_by_rate_limit INTEGER,
+    total_tastes INTEGER,
+    total_rules INTEGER,
+    total_knowledge INTEGER,
+    total_skills INTEGER,
+    regression_failed_prompts INTEGER,
+    rollback_occurred BOOLEAN DEFAULT 0,
+    deepinfra_tokens_used INTEGER,
+    deepinfra_cost_usd REAL,
+    duration_seconds INTEGER
+);

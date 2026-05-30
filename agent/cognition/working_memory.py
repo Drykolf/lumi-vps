@@ -23,6 +23,7 @@ from agent.cognition.context_policy import (
     MIN_RAW_TURNS,
     est_tokens,
 )
+from agent.evolution import get_injector
 from agent.substrate.logger import get_logger
 import math
 
@@ -142,9 +143,25 @@ def _dedup_memories(memories: list[str], recent_turns: list[dict]) -> list[str]:
 def _format_speaker_block(user_id: str) -> tuple[list[str], str]:
     """Return (parts, display_name). Always ensures the speaker row exists."""
     speaker = get_known_person(user_id) or ensure_known_person(user_id)
-    display = (speaker or {}).get("display_name") or user_id
+    speaker = speaker or {}
+    display = speaker.get("display_name") or user_id
     parts = [f"[Usuario] {display}"]
-    notes = (speaker or {}).get("notes")
+
+    # Perfil base del hablante: ubicación/zona horaria/idioma/unidades. Ya se
+    # inyecta al frame analyzer (frame._build_speaker_card) para fundar tool args
+    # y memory queries; aquí lo damos también al LLM principal para que interprete
+    # "mañana"/horarios en hora local y responda en el idioma/unidades del usuario.
+    profile = [
+        ("ubicación", speaker.get("location")),
+        ("zona horaria", speaker.get("timezone")),
+        ("idioma", speaker.get("language")),
+        ("unidades", speaker.get("units")),
+    ]
+    profile_line = " | ".join(f"{label}: {val}" for label, val in profile if val)
+    if profile_line:
+        parts.append(profile_line)
+
+    notes = speaker.get("notes")
     if notes:
         parts.append(f"Notas: {notes}")
     return parts, display
@@ -419,8 +436,36 @@ async def _build_dynamic_suffix(
             "[Memoria relevante]\n" + "\n".join("- " + m for m in merged_memories),
         ))
 
-    # 6. [Postura de Lumi sobre el tema] — tastes propios. TODO: pendiente
-    #    (subject 'lumi' en Mem0 aún no existe). Se omite el bloque por ahora.
+    # 6. Evolución de Lumi — gustos y heurísticas consolidados, recuperados por
+    #    similitud semántica (top-N). Cada bloque va envuelto: un fallo de
+    #    embeddings nunca debe tumbar el turno.
+    injector = get_injector()
+    recent_context = " ".join(
+        t.get("content", "") for t in recent_for_dedup[-4:]
+    ).strip()
+
+    try:
+        tastes = await injector.select_tastes(message, recent_context, top_k=5)
+        if tastes:
+            blocks.append((
+                "lumi_tastes",
+                "[Gustos relevantes]\n"
+                + "\n".join("- " + t["content"] for t in tastes),
+            ))
+    except Exception as e:  # noqa: BLE001 — best-effort, no bloqueante
+        logger.warning("evolution.injection.tastes.failed: %s", e)
+
+    try:
+        ctx_class = conversation_mode or "casual_chat"
+        rules = await injector.select_rules(message, ctx_class, top_k=3)
+        if rules:
+            blocks.append((
+                "lumi_rules",
+                "[Heurísticas activas]\n"
+                + "\n".join("- " + r["heuristic"] for r in rules),
+            ))
+    except Exception as e:  # noqa: BLE001 — best-effort, no bloqueante
+        logger.warning("evolution.injection.rules.failed: %s", e)
 
     # 7. Diario reciente relevante (§4) — baja a la zona del frame.
     diary_block = await _build_diary_suffix(
@@ -631,13 +676,11 @@ async def build_messages(
                 cross_turns = []
                 cross_tok = 0
                 trimmed.append("cross_session")
-        elif unit in ("diary", "memory"):
+        elif unit in ("diary", "memory", "lumi_tastes", "lumi_rules"):
             if unit in block_tok:
                 blocks = [(n, t) for n, t in blocks if n != unit]
                 block_tok.pop(unit, None)
                 trimmed.append(unit)
-        elif unit == "lumi_tastes":
-            continue  # TODO: el bloque de tastes aún no existe
         elif unit == "current_session_turns":
             n_trim = 0
             while _total() > TARGET_MAX_TOKENS and len(session_turns) > MIN_RAW_TURNS:

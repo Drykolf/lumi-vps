@@ -56,7 +56,7 @@ TARGET_MAX_TOKENS = 11000
 # Orden de recorte si se excede el presupuesto (§7). Nunca se recortan:
 # cached_prefix, identity_pulse, frame, style_capsule, mensaje actual, ni los
 # datos mínimos de entidades.
-TRIM_ORDER = ["cross_session", "diary", "memory", "lumi_tastes", "current_session_turns"]
+TRIM_ORDER = ["cross_session", "diary", "memory", "lumi_tastes", "lumi_rules", "current_session_turns"]
 
 
 def est_tokens(text: str | None) -> int:
