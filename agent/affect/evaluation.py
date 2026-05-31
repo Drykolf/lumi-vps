@@ -148,37 +148,37 @@ MOOD_EVAL_PROMPT = (_PRINCIPLES_DIR / "mood_eval_prompt.md").read_text(encoding=
 # Context builder
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _compute_session_participation(messages: list[dict]) -> tuple[str, bool]:
-    """Compute per-session participation mode for mood eval.
+def _compute_channel_participation(messages: list[dict]) -> tuple[str, bool]:
+    """Compute per-channel participation mode for mood eval.
 
     Returns (participation_block_text, lumi_participated_any).
-    lumi_participated_any is True if Lumi sent at least one message in any session.
+    lumi_participated_any is True if Lumi sent at least one message in any channel.
     """
-    sessions_info: dict[str, dict] = {}
-    session_order: list[str] = []
+    channels_info: dict[str, dict] = {}
+    channel_order: list[str] = []
     for m in messages:
-        sid = m.get("session_id") or "unknown"
-        if sid not in sessions_info:
-            sessions_info[sid] = {"total": 0, "lumi": 0, "first_ts": m.get("ts", "")}
-            session_order.append(sid)
-        sessions_info[sid]["total"] += 1
+        cid = m.get("channel_id") or "unknown"
+        if cid not in channels_info:
+            channels_info[cid] = {"total": 0, "lumi": 0, "first_ts": m.get("ts", "")}
+            channel_order.append(cid)
+        channels_info[cid]["total"] += 1
         if m.get("role") == "assistant":
-            sessions_info[sid]["lumi"] += 1
+            channels_info[cid]["lumi"] += 1
 
-    lumi_participated_any = any(info["lumi"] > 0 for info in sessions_info.values())
+    lumi_participated_any = any(info["lumi"] > 0 for info in channels_info.values())
 
     lines: list[str] = []
-    for sid in session_order:
-        info = sessions_info[sid]
+    for cid in channel_order:
+        info = channels_info[cid]
         ts_label = info["first_ts"][:16] if info["first_ts"] else "?"
         if info["lumi"] > 0:
             n = info["lumi"]
             label = f"participant — Lumi respondió {n} {'vez' if n == 1 else 'veces'}"
         else:
             label = f"observer — Lumi no respondió ({info['total']} turnos de otros)"
-        lines.append(f"- Sesión {sid[:12]} ({ts_label}): {label}")
+        lines.append(f"- Canal {cid[:12]} ({ts_label}): {label}")
 
-    block = "Participación por sesión:\n" + "\n".join(lines) if lines else ""
+    block = "Participación por canal:\n" + "\n".join(lines) if lines else ""
     return block, lumi_participated_any
 
 
@@ -191,8 +191,8 @@ def _build_eval_context(
     Build (system_prompt, user_message, lumi_participated_any) for the LLM mood evaluation call.
 
     System = lumi_soul.md + mood_policy.md + MOOD_EVAL_PROMPT
-    User   = timestamp + participation summary + mood state + involved people + transcript grouped by session
-    lumi_participated_any: True if Lumi sent at least one message in any session of the period.
+    User   = timestamp + participation summary + mood state + involved people + transcript grouped by channel
+    lumi_participated_any: True if Lumi sent at least one message in any channel of the period.
     """
     from agent.cognition.working_memory import format_turns_grouped
 
@@ -201,8 +201,8 @@ def _build_eval_context(
     now = datetime.now(UTC)
     now_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    participation_block, lumi_participated_any = _compute_session_participation(messages)
-    transcript = format_turns_grouped(messages, current_session_id=None, now=now)
+    participation_block, lumi_participated_any = _compute_channel_participation(messages)
+    transcript = format_turns_grouped(messages, current_channel_id=None, now=now)
 
     involved_block = (
         json.dumps(involved_people, ensure_ascii=False, indent=2)
@@ -289,7 +289,7 @@ async def evaluate_mood(
                 val = data[field]
                 new_state[field] = str(val) if val else None
 
-        # Guard: if Lumi was purely an observer in ALL sessions (never sent a message),
+        # Guard: if Lumi was purely an observer in ALL channels (never sent a message),
         # preserve the existing interaction timestamps — she didn't actually interact.
         if not lumi_participated_any:
             for field in ("last_interaction_at", "last_meaningful_interaction_at"):

@@ -7,8 +7,8 @@ Estás revisando todas las menciones de personas que quedaron pendientes desde l
 En el mensaje del usuario:
 
 1. `now_utc` — timestamp del momento actual.
-2. `transcripts` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos relevantes (incluye tus propios mensajes con `from: "lumi"`). Cronológicamente ordenados dentro de cada sesión. Úsalos para entender el contexto de cada mención.
-3. `pending_mentions` — lista de menciones a resolver. Cada una trae: `mention_id`, `history_id` (referencia al turno donde apareció), `session_id`, `created_at`, `source_role`, `raw_text` (el texto donde apareció la persona), `raw_name`, `descriptor`, `anchor` (el user_id del hablante), `relation_label_hint`, `mention_type`, `resolution_status_so_far`, `candidates_so_far`.
+2. `transcripts` — diccionario `{channel_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos relevantes (incluye tus propios mensajes con `from: "lumi"`). Cronológicamente ordenados dentro de cada canal. Úsalos para entender el contexto de cada mención.
+3. `pending_mentions` — lista de menciones a resolver. Cada una trae: `mention_id`, `history_id` (referencia al turno donde apareció), `channel_id`, `created_at`, `source_role`, `raw_text` (el texto donde apareció la persona), `raw_name`, `descriptor`, `anchor` (el user_id del hablante), `relation_label_hint`, `mention_type`, `resolution_status_so_far`, `candidates_so_far`.
 4. `known_persons` — snapshot de las personas ya registradas: `person_id`, `display_name`, `canonical_name`, `canonical_name_norm`, `aliases_json`, `status`, `emotional_tone`, `interest_score`.
 5. `relations` — grafo de relaciones: `from_person_id`, `to_person_id`, `relation_type`, `relation_label`, `description`, `status`. Te sirve para resolver descriptores como "mi mamá" anclados al anchor (p.ej. anchor=`jose` → `mother_of` → persona).
 

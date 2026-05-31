@@ -149,7 +149,7 @@ Remote schemas overwrite local on collision. Tool execution: `_tool_check()` (li
 
 | Database | File | Purpose |
 |----------|------|---------|
-| Traces | `data/traces.db` | Conversation history, session turns, session summaries, heartbeat runs |
+| Traces | `data/traces.db` | Conversation history (grouped by `channel_id`), diary, mood logs, heartbeat runs |
 | Core   | `data/core.db` | Lumi's mood state, person interest, user profiles, relations, skill proposals, heartbeat state |
 
 ### Memory stores
@@ -163,8 +163,7 @@ Remote schemas overwrite local on collision. Tool execution: `_tool_check()` (li
 - `agent/memory/__init__.py` is the **public API** — stream.py and working_memory.py import from there. It re-exports from episodic, semantic, and mindstream submodules.
 - Conversation history is NOT stored in Mem0 (by design — it's sequential, not semantic).
 - `agent/memory/mindstream/social.py` manages person interest scores, user profiles, and relations in core.db.
-- `agent/memory/mindstream/session.py` tracks turn counts per session (traces.db).
-- `agent/memory/mindstream/consolidation.py` generates LLM-powered session summaries every 5 turns.
+- `agent/memory/mindstream/consolidation.py` generates LLM-powered diary entries and per-channel consolidation. Conversation turns are grouped by `channel_id` (the conversation/chat identifier; in WhatsApp it's the `remote_jid`). The transport platform is a separate `platform` field (whatsapp/discord/desktop/web).
 
 ### Database access layer (`agent/subconscious/`)
 

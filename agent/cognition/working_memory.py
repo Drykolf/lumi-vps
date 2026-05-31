@@ -1,7 +1,7 @@
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from agent.memory import (
-    get_recent_session_log,
+    get_recent_channel_log,
     get_recent_user_log,
     read_recent_diary_entries,
     get_known_person,
@@ -11,8 +11,8 @@ from agent.affect import get_state, state_to_text, get_sleep_stage
 from agent.affect.mood import LUMI_TZ_OFFSET
 from agent.cognition.context_policy import (
     raw_turns_for_mode,
-    cross_session_rule_for_mode,
-    select_cross_session,
+    cross_channel_rule_for_mode,
+    select_cross_channel,
     diary_rule_for_mode,
     select_diary,
     entity_names_from_context,
@@ -427,8 +427,8 @@ async def _build_dynamic_suffix(
         blocks.append(("posture", posture))
 
     # 5. Memoria relevante — ya pre-buscada por resolve_memory_plan().
-    sid = metadata.get("session_id", "default")
-    recent_for_dedup = get_recent_session_log(sid, limit=10)
+    cid = metadata.get("channel_id", "default")
+    recent_for_dedup = get_recent_channel_log(cid, limit=10)
     merged_memories = _dedup_memories(list(memory_results or []), recent_for_dedup)
     if merged_memories:
         blocks.append((
@@ -496,14 +496,14 @@ async def _build_dynamic_suffix(
     if presence_note:
         blocks.append(("presence", presence_note))
 
-    # 10. Contexto operativo (ubicación + canal/sesión/hora) + grupo — cierran.
-    channel = metadata.get("channel", "desktop")
-    session_id = metadata.get("session_id", "unknown")
+    # 10. Contexto operativo (ubicación + plataforma/canal/hora) + grupo — cierran.
+    platform = metadata.get("platform", "desktop")
+    channel_id = metadata.get("channel_id", "unknown")
     blocks.append((
         "operational",
         "[Contexto] La ubicacion principal de Lumi es en Colombia (UTC-5); guarda todo "
         "en UTC pero interpreta horarios a hora colombiana. "
-        "Canal: " + channel + " | Sesion: " + session_id + " | Hora: " + now_str,
+        "Plataforma: " + platform + " | Canal: " + channel_id + " | Hora: " + now_str,
     ))
 
     if channel_note:
@@ -535,43 +535,43 @@ def _humanize_delta(ts: str, now: datetime) -> str:
 
 def format_turns_grouped(
     turns: list[dict],
-    current_session_id: str | None,
+    current_channel_id: str | None,
     now: datetime,
 ) -> str:
-    """Group turns by session_id and format as labeled blocks.
+    """Group turns by channel_id and format as labeled blocks.
 
-    Each block starts with '--- Sesión actual ---' (if session matches
-    current_session_id) or '--- Sesión N (hace Xh) ---' for others.
-    Sessions are ordered by their first turn ascending (chronological).
+    Each block starts with '--- Canal actual ---' (if channel matches
+    current_channel_id) or '--- Canal N (hace Xh) ---' for others.
+    Channels are ordered by their first turn ascending (chronological).
     Speaker prefix: user_id for user turns, 'Lumi' for assistant.
     """
     if not turns:
         return ""
 
-    sessions: dict[str, list[dict]] = {}
+    channels: dict[str, list[dict]] = {}
     for t in turns:
-        sid = t.get("session_id") or "unknown"
-        sessions.setdefault(sid, []).append(t)
+        cid = t.get("channel_id") or "unknown"
+        channels.setdefault(cid, []).append(t)
 
-    for sid in sessions:
-        sessions[sid].sort(key=lambda t: t.get("ts", ""))
+    for cid in channels:
+        channels[cid].sort(key=lambda t: t.get("ts", ""))
 
-    ordered = sorted(sessions.keys(), key=lambda s: sessions[s][0].get("ts", ""))
-    if current_session_id and current_session_id in ordered:
-        ordered.remove(current_session_id)
-        ordered.insert(0, current_session_id)
+    ordered = sorted(channels.keys(), key=lambda c: channels[c][0].get("ts", ""))
+    if current_channel_id and current_channel_id in ordered:
+        ordered.remove(current_channel_id)
+        ordered.insert(0, current_channel_id)
 
     blocks = []
     counter = 1
-    for sid in ordered:
-        turns_in = sessions[sid]
-        if sid == current_session_id:
-            header = "--- Sesión actual ---"
+    for cid in ordered:
+        turns_in = channels[cid]
+        if cid == current_channel_id:
+            header = "--- Canal actual ---"
         else:
             latest_ts = turns_in[-1].get("ts", "")
             time_label = _humanize_delta(latest_ts, now) if latest_ts else ""
             suffix = f" ({time_label})" if time_label else ""
-            header = f"--- Sesión {counter}{suffix} ---"
+            header = f"--- Canal {counter}{suffix} ---"
             counter += 1
 
         lines = [header]
@@ -584,8 +584,8 @@ def format_turns_grouped(
 
 
 def _turns_to_messages(turns: list[dict]) -> list[dict]:
-    """Convert session turns to OpenAI-format message dicts.
-    User turns get speaker prefix (multiple users may share a session).
+    """Convert channel turns to OpenAI-format message dicts.
+    User turns get speaker prefix (multiple users may share a channel).
     Assistant turns keep content as-is — role already identifies Lumi."""
     out = []
     for t in turns:
@@ -620,26 +620,26 @@ async def build_messages(
         memory_queries=memory_queries,
     )
 
-    sid = metadata.get("session_id", "default")
+    cid = metadata.get("channel_id", "default")
     since = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
     now = datetime.now(UTC)
 
-    # Fase 2: el historial crudo de la sesión actual se limita por modo
+    # Fase 2: el historial crudo del canal actual se limita por modo
     # (antes 100 fijo). La tabla vive en context_policy (fuente única). El
     # frame fallido devuelve conversation_mode="casual_chat", que cae en su
     # política (6); modos inesperados usan el fallback (8).
     turn_limit = raw_turns_for_mode(conversation_mode)
-    session_turns = get_recent_session_log(sid, since_ts=since, limit=turn_limit)
+    channel_turns = get_recent_channel_log(cid, since_ts=since, limit=turn_limit)
 
-    # Fase 3: el cross-session se OMITE por defecto. Sólo se consulta e incluye
+    # Fase 3: el cross-channel se OMITE por defecto. Sólo se consulta e incluye
     # bajo reglas explícitas por modo (excerpts_if_explicit / _mentions_entity),
     # con fragmentos crudos (sin resumir). En 'omit' ni siquiera se toca la DB.
-    cross_rule = cross_session_rule_for_mode(conversation_mode)
+    cross_rule = cross_channel_rule_for_mode(conversation_mode)
     if cross_rule == "omit":
         cross_turns = []
     else:
-        cross_all = get_recent_user_log(user_id, since_ts=since, exclude_session_id=sid, limit=100)
-        cross_turns = select_cross_session(
+        cross_all = get_recent_user_log(user_id, since_ts=since, exclude_channel_id=cid, limit=100)
+        cross_turns = select_cross_channel(
             cross_all, cross_rule, message, bool(entities_context)
         )
 
@@ -655,11 +655,11 @@ async def build_messages(
         if not cross_turns:
             return ""
         return "[Conversaciones anteriores]\n\n" + format_turns_grouped(
-            cross_turns, current_session_id=None, now=now
+            cross_turns, current_channel_id=None, now=now
         )
 
     cross_tok = est_tokens(_cross_text())
-    turns_msgs = _turns_to_messages(session_turns)
+    turns_msgs = _turns_to_messages(channel_turns)
 
     def _turns_tok() -> int:
         return sum(est_tokens(m["content"]) for m in turns_msgs)
@@ -671,32 +671,32 @@ async def build_messages(
     for unit in TRIM_ORDER:
         if _total() <= TARGET_MAX_TOKENS:
             break
-        if unit == "cross_session":
+        if unit == "cross_channel":
             if cross_turns:
                 cross_turns = []
                 cross_tok = 0
-                trimmed.append("cross_session")
+                trimmed.append("cross_channel")
         elif unit in ("diary", "memory", "lumi_tastes", "lumi_rules"):
             if unit in block_tok:
                 blocks = [(n, t) for n, t in blocks if n != unit]
                 block_tok.pop(unit, None)
                 trimmed.append(unit)
-        elif unit == "current_session_turns":
+        elif unit == "current_channel_turns":
             n_trim = 0
-            while _total() > TARGET_MAX_TOKENS and len(session_turns) > MIN_RAW_TURNS:
-                session_turns = session_turns[1:]  # descarta el más antiguo
-                turns_msgs = _turns_to_messages(session_turns)
+            while _total() > TARGET_MAX_TOKENS and len(channel_turns) > MIN_RAW_TURNS:
+                channel_turns = channel_turns[1:]  # descarta el más antiguo
+                turns_msgs = _turns_to_messages(channel_turns)
                 n_trim += 1
             if n_trim:
-                trimmed.append(f"current_session_turns:{n_trim}")
+                trimmed.append(f"current_channel_turns:{n_trim}")
 
     dynamic = "\n\n".join(text for _, text in blocks)
     system_prompt = cached + "\n\n---\n\n" + dynamic
 
     budget = dict(block_tok)
     budget["cached_prefix"] = prefix_tok
-    budget["cross_session"] = cross_tok
-    budget["current_session_turns"] = _turns_tok()
+    budget["cross_channel"] = cross_tok
+    budget["current_channel_turns"] = _turns_tok()
     budget["current_message"] = current_tok
     budget["total_input_tokens_estimated"] = _total()
     _dump_dynamic_log(user_id, message, dynamic, budget=budget, trimmed=trimmed)

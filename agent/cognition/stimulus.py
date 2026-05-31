@@ -71,11 +71,11 @@ def _inject_save_verification(messages: list[dict], result: dict, category: str)
     messages[0]["content"] = msg + "\n\n" + messages[0]["content"]
 
 
-async def handle_long_task(user_id: str, message: str, sid: str) -> str:
+async def handle_long_task(user_id: str, message: str, cid: str) -> str:
     return "[thinking] Dame un momento, esto toma un poco mas de tiempo."
 
 
-async def handle_explicit_save(user_id: str, message: str, sid: str, metadata: dict) -> str:
+async def handle_explicit_save(user_id: str, message: str, cid: str, metadata: dict) -> str:
     category = attention.detect_category(message)
     logger.info(f"[explicit_save] category={category} | user_id={user_id}")
     processed = await process_explicit_memory(message)

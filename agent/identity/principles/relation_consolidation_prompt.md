@@ -20,7 +20,7 @@ En el mensaje del usuario:
 2. `persons` — lista de personas afectadas en la ventana. Cada una trae:
    - `person_id`, `display_name`, `current_state`
    - `current_relations` — lista de relaciones ya registradas (desde y hacia la persona); cada item tiene `from_person_id`, `to_person_id`, `relation_type`, `relation_label`, `status`, `description`.
-   - `sessions` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con todos los turnos de las sesiones donde aparece la persona.
+   - `channels` — diccionario `{channel_id: [{ts, from, content, history_id}, ...]}` con todos los turnos de los canales donde aparece la persona.
    - `mentions` — lista de menciones de esa persona en la ventana.
 
 ## Tu tarea
@@ -56,7 +56,7 @@ JSON estricto. Nada antes, nada después.
       "description": "Gloria es la madre de Jose, mencionado explícitamente.",
       "status": "confirmed",
       "confidence": 0.95,
-      "reason": "Jose dijo 'mi mamá Gloria' en sesión X."
+      "reason": "Jose dijo 'mi mamá Gloria' en canal X."
     }
   ]
 }
@@ -65,4 +65,4 @@ JSON estricto. Nada antes, nada después.
 Si no hay relaciones nuevas o cambios, devolver `{"relations": []}`.
 
 `reason` siempre en español neutro colombiano, una línea. No inventes
-relaciones sin soporte en `sessions` o `mentions`.
+relaciones sin soporte en `channels` o `mentions`.

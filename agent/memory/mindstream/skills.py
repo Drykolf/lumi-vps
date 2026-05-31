@@ -36,7 +36,7 @@ from pathlib import Path
 
 from agent.subconscious import core, traces
 from agent.substrate.logger import get_logger
-from agent.memory.episodic import get_history_grouped_by_session
+from agent.memory.episodic import get_history_grouped_by_channel
 from agent.expression.synapses import chat, ModelGroup
 
 logger = get_logger("memory.skills")
@@ -182,11 +182,11 @@ def _load_window(days: int) -> list[dict]:
 
     A user turn is "engaged" when Lumi responded to the conversation that
     contained it — operationalised as: there exists an assistant turn LATER
-    in the same session (i.e. user history_id < last assistant history_id in
-    that session). This excludes:
-      - Observer sessions: group chats where Lumi was present but never spoke.
+    in the same channel (i.e. user history_id < last assistant history_id in
+    that channel). This excludes:
+      - Observer channels: group chats where Lumi was present but never spoke.
       - Tail messages: user turns that came after Lumi already stopped
-        responding in that session.
+        responding in that channel.
 
     Rationale: a skill formalises a method Lumi has been improvising in
     practice. Conversations she only watched do not count as practice —
@@ -195,20 +195,20 @@ def _load_window(days: int) -> list[dict]:
     actually performed, not from observed conversations").
 
     Returned shape mirrors `get_history_since` rows for downstream code:
-    each dict has `id`, `role`, `content`, `user_id`, `session_id`, `ts`.
+    each dict has `id`, `role`, `content`, `user_id`, `channel_id`, `ts`.
     """
     now = datetime.now(UTC)
     cutoff = now - timedelta(days=days)
-    grouped = get_history_grouped_by_session(cutoff.isoformat(), now.isoformat())
+    grouped = get_history_grouped_by_channel(cutoff.isoformat(), now.isoformat())
 
     engaged: list[dict] = []
-    observer_sessions = 0
+    observer_channels = 0
     tail_dropped = 0
 
-    for sid, msgs in grouped.items():
+    for cid, msgs in grouped.items():
         assistant_ids = [m["history_id"] for m in msgs if m["role"] == "assistant"]
         if not assistant_ids:
-            observer_sessions += 1
+            observer_channels += 1
             continue
         last_assistant = max(assistant_ids)
         for m in msgs:
@@ -222,14 +222,14 @@ def _load_window(days: int) -> list[dict]:
                 "role": m["role"],
                 "content": m["content"],
                 "user_id": m["user_id"],
-                "session_id": sid,
+                "channel_id": cid,
                 "ts": m["ts"],
             })
 
     engaged.sort(key=lambda r: r["id"])
     logger.info(
-        f"[skills] window load: sessions={len(grouped)} "
-        f"observer_skipped={observer_sessions} "
+        f"[skills] window load: channels={len(grouped)} "
+        f"observer_skipped={observer_channels} "
         f"tail_dropped={tail_dropped} engaged_user_turns={len(engaged)}"
     )
     return engaged

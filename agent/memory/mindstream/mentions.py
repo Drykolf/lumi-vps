@@ -13,7 +13,7 @@ def add_mention(
     entity: dict,
     history_id: int,
     user_id: str,
-    session_id: str,
+    channel_id: str,
     source_role: str = "user",
 ) -> dict | None:
     """Persist one detected entity mention from turn_frame_check output.
@@ -24,7 +24,7 @@ def add_mention(
 
     cur = conn.execute(
         """INSERT INTO person_mentions
-           (history_id, user_id, session_id, source_role,
+           (history_id, user_id, channel_id, source_role,
             raw_text, mention_type, raw_name, normalized_name,
             descriptor, relation_label_hint, anchor, confidence,
             extractor_json, created_at)
@@ -32,7 +32,7 @@ def add_mention(
         (
             history_id,
             user_id,
-            session_id,
+            channel_id,
             source_role,
             entity.get("raw_text", ""),
             entity.get("mention_type", "named_person"),

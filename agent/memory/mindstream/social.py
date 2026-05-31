@@ -309,7 +309,7 @@ def list_relations_all(include_stale: bool = False) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════════════
 # Platform 'whatsapp' stores the E.164 phone number (the same number is also
 # reachable via SMS / voice — the inbound transport is per-request in
-# ChatRequest.channel). 'discord' stores the Discord user snowflake as text.
+# ChatRequest.platform). 'discord' stores the Discord user snowflake as text.
 # Identifier format is caller's responsibility — store E.164 ('+57...') for
 # whatsapp, snowflake string for discord.
 

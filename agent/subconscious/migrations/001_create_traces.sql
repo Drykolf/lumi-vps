@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS history (
     user_id TEXT NOT NULL,
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT 'default',
+    channel_id TEXT NOT NULL DEFAULT 'default',
     ts TEXT NOT NULL
 );
 
@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS person_mentions (
     mention_id INTEGER PRIMARY KEY AUTOINCREMENT,
     history_id INTEGER NOT NULL,
     user_id TEXT NOT NULL,
-    session_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
     source_role TEXT NOT NULL DEFAULT 'user',
     raw_text TEXT NOT NULL,
     mention_type TEXT NOT NULL,
@@ -121,8 +121,8 @@ CREATE TABLE IF NOT EXISTS person_mentions (
     FOREIGN KEY (history_id) REFERENCES history(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_person_mentions_session
-    ON person_mentions(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_person_mentions_channel
+    ON person_mentions(channel_id, created_at);
 
 CREATE INDEX IF NOT EXISTS idx_person_mentions_user
     ON person_mentions(user_id, created_at);
@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS mood_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
     trigger_source TEXT NOT NULL,
-    session_id TEXT,
+    channel_id TEXT,
     mood_valence REAL NOT NULL,
     mood_energy REAL NOT NULL,
     irritation REAL NOT NULL,
@@ -162,5 +162,5 @@ CREATE TABLE IF NOT EXISTS mood_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mood_logs_ts ON mood_logs(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_mood_logs_session ON mood_logs(session_id);
+CREATE INDEX IF NOT EXISTS idx_mood_logs_channel ON mood_logs(channel_id);
 CREATE INDEX IF NOT EXISTS idx_mood_logs_trigger ON mood_logs(trigger_source, ts DESC);

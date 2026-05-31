@@ -34,13 +34,13 @@ En el mensaje del usuario:
 2. `persons` — lista de personas afectadas en la ventana. Cada una trae:
    - `person_id`, `display_name`
    - `current_state` con `canonical_name`, `aliases` (lista de dicts con `value`/`norm`/`type`/`confirmed`/`confidence`), `emotional_tone`, `status`, `interest_score`
-   - `sessions` — diccionario `{session_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos de las sesiones donde la persona apareció (incluye tus propios mensajes con `from: "lumi"` y mensajes de otros usuarios del grupo).
-   - `mentions` — lista de las menciones de esa persona en la ventana (`created_at`, `raw_text`, `session_id`, `history_id`).
+   - `channels` — diccionario `{channel_id: [{ts, from, content, history_id}, ...]}` con TODOS los turnos de los canales donde la persona apareció (incluye tus propios mensajes con `from: "lumi"` y mensajes de otros usuarios del grupo).
+   - `mentions` — lista de las menciones de esa persona en la ventana (`created_at`, `raw_text`, `channel_id`, `history_id`).
 
 ## Tu tarea
 
 Por cada persona, decide qué actualizar. Solo emite campos cuando hay evidencia
-clara en `sessions` o `mentions`. Si no hay nada que refinar, omite la persona.
+clara en `channels` o `mentions`. Si no hay nada que refinar, omite la persona.
 
 ### `new_aliases`
 
@@ -92,11 +92,11 @@ JSON estricto. Nada antes, nada después.
       ],
       "name_correction": null,
       "refined_emotional_tone": "positive",
-      "reason": "Conversación afectuosa en sesión X; aparece diminutivo nuevo."
+      "reason": "Conversación afectuosa en canal X; aparece diminutivo nuevo."
     }
   ]
 }
 ```
 
 `reason` en español neutro colombiano, una línea. No inventes nada que no esté
-en los `sessions` o `mentions`.
+en los `channels` o `mentions`.

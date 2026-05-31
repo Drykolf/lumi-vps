@@ -2,11 +2,10 @@
 Public API for memory — all agent modules import from here.
 
 Underlying implementations:
-  agent/memory/episodic.py       — historial, sesiones, resumenes (traces.db)
+  agent/memory/episodic.py       — historial, canales, resumenes (traces.db)
   agent/memory/semantic.py       — Mem0 semantico
   agent/memory/mindstream/social.py         — personas, relaciones, lumi_state (core.db)
-  agent/memory/mindstream/session.py        — contador de turnos por sesion (traces.db)
-  agent/memory/mindstream/consolidation.py  — generacion LLM de resumenes de sesion (traces.db)
+  agent/memory/mindstream/consolidation.py  — generacion LLM de resumenes por canal (traces.db)
 
 Usage:
     from agent.memory import get_recent_user_log, save_turn, add_memory, ...
@@ -14,18 +13,18 @@ Usage:
 from agent.subconscious import init_databases
 from agent.memory.episodic import (
     save_turn,
-    get_recent_session_log,
+    get_recent_channel_log,
     get_recent_user_log,
     get_history_since,
     add_mood_log,
     write_diary_entry,
     read_recent_diary_entries,
-    get_history_grouped_by_session,
+    get_history_grouped_by_channel,
     get_turns_by_ids,
     get_mood_logs_since,
     get_active_user_ids_in_period,
     get_turns_in_period_by_user,
-    get_session_context_for_user_in_period,
+    get_channel_context_for_user_in_period,
 )
 from agent.memory.semantic import (
     search_relevant,
@@ -99,7 +98,7 @@ __all__ = [
     "init_databases",
     "init_core_db",
     "save_turn",
-    "get_recent_session_log",
+    "get_recent_channel_log",
     "get_recent_user_log",
     "get_history_since",
     "search_relevant",
@@ -161,10 +160,10 @@ __all__ = [
     "add_mood_log",
     "write_diary_entry",
     "read_recent_diary_entries",
-    "get_history_grouped_by_session",
+    "get_history_grouped_by_channel",
     "get_turns_by_ids",
     "get_mood_logs_since",
     "get_active_user_ids_in_period",
     "get_turns_in_period_by_user",
-    "get_session_context_for_user_in_period",
+    "get_channel_context_for_user_in_period",
 ]

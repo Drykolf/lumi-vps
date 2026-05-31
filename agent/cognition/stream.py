@@ -131,8 +131,8 @@ CACHE_KEY_CHAT = os.getenv("PROMPT_CACHE_KEY_CHAT")
 CACHE_KEY_FRAME = os.getenv("PROMPT_CACHE_KEY_FRAME")
 
 
-def _get_sid(metadata: dict) -> str:
-    return metadata.get("session_id", "default")
+def _get_cid(metadata: dict) -> str:
+    return metadata.get("channel_id", "default")
 
 
 def _persist_mentions(
@@ -140,11 +140,11 @@ def _persist_mentions(
     entities_context: list[dict],
     history_id: int,
     user_id: str,
-    sid: str,
+    cid: str,
 ) -> None:
     """Save detected entity mentions + their resolution context to person_mentions."""
     for i, entity in enumerate(entities):
-        row = add_mention(entity, history_id=history_id, user_id=user_id, session_id=sid)
+        row = add_mention(entity, history_id=history_id, user_id=user_id, channel_id=cid)
         if not row:
             continue
         ctx = entities_context[i] if i < len(entities_context) else None
@@ -165,17 +165,17 @@ def _finalize_turn(
     user_id: str,
     message: str,
     reply_text: str,
-    sid: str,
+    cid: str,
     entities: list[dict] | None = None,
     entities_context: list[dict] | None = None,
 ):
-    history_id = save_turn(user_id, "user", message, sid)
-    save_turn(user_id, "assistant", reply_text, sid)
+    history_id = save_turn(user_id, "user", message, cid)
+    save_turn(user_id, "assistant", reply_text, cid)
 
     touch_last_interaction()
 
     if entities:
-        _persist_mentions(entities, entities_context or [], history_id, user_id, sid)
+        _persist_mentions(entities, entities_context or [], history_id, user_id, cid)
     # mention_count / last_mentioned on known_persons are bumped by the
     # nightly consolidator (consolidate_entity_mentions). Per-turn we only
     # persist the raw + resolved mention row.
@@ -195,21 +195,21 @@ async def cycle(user_id: str, message: str, metadata: dict):
     #task_type = attention.classify(message)
     task_type = "chat"
     #logger.info(f"[classify] task_type={task_type} | msg_preview={message[:80]}")
-    sid = _get_sid(metadata)
+    cid = _get_cid(metadata)
 
     """if task_type == "long_task":
-        reply = await handle_long_task(user_id, message, sid)
-        _finalize_turn(user_id, message, reply, sid)
+        reply = await handle_long_task(user_id, message, cid)
+        _finalize_turn(user_id, message, reply, cid)
         yield reply
         return
 
     if task_type == "explicit_save":
-        reply = await handle_explicit_save(user_id, message, sid, metadata)
-        _finalize_turn(user_id, message, reply, sid)
+        reply = await handle_explicit_save(user_id, message, cid, metadata)
+        _finalize_turn(user_id, message, reply, cid)
         yield reply
         return"""
 
-    frame = await turn_frame_check(user_id, message, sid, metadata, prompt_cache_key=CACHE_KEY_FRAME)
+    frame = await turn_frame_check(user_id, message, cid, metadata, prompt_cache_key=CACHE_KEY_FRAME)
     entities = frame["entities"]
     entities_context = await _resolve_entities(entities, user_id) if entities else []
     logger.info(f"[entities] detected {len(entities)} entities with context: {[{'raw_text': e.get('raw_text','')[:30], 'status': c.get('status'), 'person_id': c.get('person_id')} for e, c in zip(entities, entities_context)]}")
@@ -251,7 +251,7 @@ async def cycle(user_id: str, message: str, metadata: dict):
         full_reply += chunk
         yield chunk
 
-    _finalize_turn(user_id, message, full_reply, sid, entities=entities, entities_context=entities_context)
+    _finalize_turn(user_id, message, full_reply, cid, entities=entities, entities_context=entities_context)
 
 
 async def run_stream(user_id: str, message: str, metadata: dict):
@@ -266,7 +266,7 @@ async def run(user_id: str, message: str, metadata: dict) -> str:
     return full
 
 
-async def observe_turn(user_id: str, message: str, sid: str) -> None:
+async def observe_turn(user_id: str, message: str, cid: str) -> None:
     """Save an observed group-chat message and run lightweight entity extraction.
 
     Called as a background task for messages LUMI witnessed but did not respond
@@ -274,12 +274,12 @@ async def observe_turn(user_id: str, message: str, sid: str) -> None:
     quiescence step 1 can resolve them. The speaker's own evaluation is handled
     at quiescence time by inspecting history directly (see consolidation.py).
     """
-    history_id = save_turn(user_id, "user", message, sid)
+    history_id = save_turn(user_id, "user", message, cid)
     try:
-        frame = await turn_frame_check(user_id, message, sid, metadata={})
+        frame = await turn_frame_check(user_id, message, cid, metadata={})
         entities = frame["entities"]
         if entities:
             entities_context = await _resolve_entities(entities, user_id)
-            _persist_mentions(entities, entities_context, history_id, user_id, sid)
+            _persist_mentions(entities, entities_context, history_id, user_id, cid)
     except Exception as e:
         logger.warning(f"[observe_turn] frame check failed: {e}")

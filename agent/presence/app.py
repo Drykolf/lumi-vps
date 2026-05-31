@@ -36,20 +36,20 @@ def verify_key(x_api_key: str):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-_DIRECT_CHANNELS = {"desktop", "web"}
+_DIRECT_PLATFORMS = {"desktop", "web"}
 
 
 class UnknownInboundUser(Exception):
     """Inbound whatsapp/discord identifier not mapped to a known person."""
 
 
-def resolve_inbound_user_id(channel: str, raw_user_id: str) -> str:
-    if channel in _DIRECT_CHANNELS:
+def resolve_inbound_user_id(platform: str, raw_user_id: str) -> str:
+    if platform in _DIRECT_PLATFORMS:
         return raw_user_id
-    row = get_identifier(channel, raw_user_id)
+    row = get_identifier(platform, raw_user_id)
     if row is None:
         raise UnknownInboundUser(
-            f"inbound {channel} identifier {raw_user_id!r} is not mapped to a known person"
+            f"inbound {platform} identifier {raw_user_id!r} is not mapped to a known person"
         )
     return row["person_id"]
 
@@ -58,8 +58,8 @@ class ChatRequest(BaseModel):
     content: str
     user_id: str
     source: Literal["asr", "text"] = "text"
-    channel: Literal["desktop", "discord", "whatsapp", "web"] = "desktop"
-    session_id: str = "default"
+    platform: Literal["desktop", "discord", "whatsapp", "web"] = "desktop"
+    channel_id: str = "default"
     conversation_active: bool = True
     was_interruption: bool = False
     interrupt_context: str | None = None
@@ -70,7 +70,7 @@ class ObserveRequest(BaseModel):
     user_id: str
     source: Literal["audio", "screen"] = "audio"
     content: str
-    session_id: str = "default"
+    channel_id: str = "default"
 
 class UserProfileRequest(BaseModel):
     display_name: str
@@ -107,14 +107,14 @@ async def chat(req: ChatRequest, x_api_key: str = Header(...)):
     verify_key(x_api_key)
 
     try:
-        person_id = resolve_inbound_user_id(req.channel, req.user_id)
+        person_id = resolve_inbound_user_id(req.platform, req.user_id)
     except UnknownInboundUser as e:
         raise HTTPException(status_code=404, detail=str(e))
 
     metadata = {
         "source": req.source,
-        "channel": req.channel,
-        "session_id": req.session_id,
+        "platform": req.platform,
+        "channel_id": req.channel_id,
         "conversation_active": req.conversation_active,
         "was_interruption": req.was_interruption,
         "interrupt_context": req.interrupt_context,
@@ -170,7 +170,7 @@ async def whatsapp_webhook(request: Request):
 
     logger.info(
         f"[whatsapp-webhook] inbound person_id={parsed.person_id} "
-        f"instance={parsed.instance} session_id={parsed.metadata['session_id']} "
+        f"instance={parsed.instance} channel_id={parsed.metadata['channel_id']} "
         f"is_group={parsed.is_group} text={parsed.text!r}"
     )
     return await handle_inbound(parsed)

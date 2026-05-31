@@ -11,14 +11,14 @@ agent.cognition evita ciclos de importación.
 # aplica group_overlay. Valores de memoria: límite total tras fusión (en shadow
 # las memorias llegan como lista plana, sin desglose global/entity/rel).
 MODE_POLICY: dict[str, dict] = {
-    "casual_chat":        {"raw_turns": 6,  "global_mem": 2, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_session": "omit",                        "lumi_tastes": "use_if_relevant"},
-    "technical_debug":    {"raw_turns": 12, "global_mem": 5, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_session": "excerpts_if_explicit",        "lumi_tastes": "skip"},
-    "strategic_analysis": {"raw_turns": 12, "global_mem": 5, "entity_mem": 3, "rel_mem": 2, "diary": "relevant_only",        "cross_session": "excerpts_if_explicit",        "lumi_tastes": "use_if_relevant"},
-    "emotional_support":  {"raw_turns": 8,  "global_mem": 3, "entity_mem": 0, "rel_mem": 0, "diary": "relevant_if_emotional", "cross_session": "omit",                       "lumi_tastes": "skip"},
-    "social_evaluation":  {"raw_turns": 10, "global_mem": 2, "entity_mem": 4, "rel_mem": 3, "diary": "relevant_if_entity",   "cross_session": "excerpts_if_mentions_entity", "lumi_tastes": "use_if_relevant"},
-    "tool_request":       {"raw_turns": 4,  "global_mem": 1, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_session": "omit",                        "lumi_tastes": "skip"},
-    "boundary_sensitive": {"raw_turns": 8,  "global_mem": 2, "entity_mem": 1, "rel_mem": 1, "diary": "omit",                 "cross_session": "omit",                        "lumi_tastes": "skip"},
-    "creative_design":    {"raw_turns": 10, "global_mem": 4, "entity_mem": 0, "rel_mem": 0, "diary": "relevant_only",        "cross_session": "excerpts_if_explicit",        "lumi_tastes": "use_if_relevant"},
+    "casual_chat":        {"raw_turns": 6,  "global_mem": 2, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_channel": "omit",                        "lumi_tastes": "use_if_relevant"},
+    "technical_debug":    {"raw_turns": 12, "global_mem": 5, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_channel": "excerpts_if_explicit",        "lumi_tastes": "skip"},
+    "strategic_analysis": {"raw_turns": 12, "global_mem": 5, "entity_mem": 3, "rel_mem": 2, "diary": "relevant_only",        "cross_channel": "excerpts_if_explicit",        "lumi_tastes": "use_if_relevant"},
+    "emotional_support":  {"raw_turns": 8,  "global_mem": 3, "entity_mem": 0, "rel_mem": 0, "diary": "relevant_if_emotional", "cross_channel": "omit",                       "lumi_tastes": "skip"},
+    "social_evaluation":  {"raw_turns": 10, "global_mem": 2, "entity_mem": 4, "rel_mem": 3, "diary": "relevant_if_entity",   "cross_channel": "excerpts_if_mentions_entity", "lumi_tastes": "use_if_relevant"},
+    "tool_request":       {"raw_turns": 4,  "global_mem": 1, "entity_mem": 0, "rel_mem": 0, "diary": "omit",                 "cross_channel": "omit",                        "lumi_tastes": "skip"},
+    "boundary_sensitive": {"raw_turns": 8,  "global_mem": 2, "entity_mem": 1, "rel_mem": 1, "diary": "omit",                 "cross_channel": "omit",                        "lumi_tastes": "skip"},
+    "creative_design":    {"raw_turns": 10, "global_mem": 4, "entity_mem": 0, "rel_mem": 0, "diary": "relevant_only",        "cross_channel": "excerpts_if_explicit",        "lumi_tastes": "use_if_relevant"},
 }
 _DEFAULT_MODE = "casual_chat"
 
@@ -56,7 +56,7 @@ TARGET_MAX_TOKENS = 11000
 # Orden de recorte si se excede el presupuesto (§7). Nunca se recortan:
 # cached_prefix, identity_pulse, frame, style_capsule, mensaje actual, ni los
 # datos mínimos de entidades.
-TRIM_ORDER = ["cross_session", "diary", "memory", "lumi_tastes", "lumi_rules", "current_session_turns"]
+TRIM_ORDER = ["cross_channel", "diary", "memory", "lumi_tastes", "lumi_rules", "current_channel_turns"]
 
 
 def est_tokens(text: str | None) -> int:
@@ -142,27 +142,27 @@ def raw_turns_for_mode(mode: str | None) -> int:
     return _FALLBACK_RAW_TURNS
 
 
-# ── Cross-session (§8, Fase 3) ────────────────────────────────────────────────
-# Por defecto el cross-session se OMITE. Sólo entra bajo reglas explícitas.
+# ── Cross-channel (§8, Fase 3) ────────────────────────────────────────────────
+# Por defecto el cross-channel se OMITE. Sólo entra bajo reglas explícitas.
 
 # Palabras que sugieren referencia explícita a conversaciones pasadas.
 EXPLICIT_RECALL = (
     "antes", "la otra vez", "ayer", "recuerdas", "habíamos", "habiamos",
     "dijiste", "comentamos", "hablamos",
 )
-# Cuántos turnos cross-session incluir cuando una regla los habilita.
+# Cuántos turnos cross-channel incluir cuando una regla los habilita.
 CROSS_SESSION_EXCERPT_LIMIT = 10
 
 
-def cross_session_rule_for_mode(mode: str | None) -> str:
-    """Regla de cross-session para el modo. Default seguro: 'omit'."""
+def cross_channel_rule_for_mode(mode: str | None) -> str:
+    """Regla de cross-channel para el modo. Default seguro: 'omit'."""
     if mode and mode in MODE_POLICY:
-        return MODE_POLICY[mode]["cross_session"]
+        return MODE_POLICY[mode]["cross_channel"]
     return "omit"
 
 
-def select_cross_session(turns: list, rule: str, message: str, has_entities: bool) -> list:
-    """Selección determinística de fragmentos cross-session (sin resumir).
+def select_cross_channel(turns: list, rule: str, message: str, has_entities: bool) -> list:
+    """Selección determinística de fragmentos cross-channel (sin resumir).
 
     Heurística provisional de Fase 1/3 hasta tener un scorer real."""
     if not turns or rule == "omit":

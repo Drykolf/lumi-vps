@@ -321,7 +321,7 @@ WHERE key = 'mood_state'
 CREATE TABLE IF NOT EXISTS lumi_self_observations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    session_id TEXT,
+    channel_id TEXT,
     trace_id INTEGER,
     category TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -338,7 +338,7 @@ CREATE INDEX IF NOT EXISTS idx_self_obs_ts ON lumi_self_observations(ts DESC);
 CREATE TABLE IF NOT EXISTS lumi_opinion_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    session_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
     trace_id INTEGER,
     user_id TEXT NOT NULL,
     subject TEXT NOT NULL,

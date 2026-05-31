@@ -209,8 +209,8 @@ def build_metadata(remote_jid: str) -> dict:
     """Construye el metadata que recibe run()."""
     return {
         "source": "text",
-        "channel": "whatsapp",
-        "session_id": remote_jid,
+        "platform": "whatsapp",
+        "channel_id": remote_jid,
         "conversation_active": True,
         "was_interruption": False,
         "interrupt_context": None,
@@ -298,7 +298,7 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
 # ── Orquestación: dispatch entre 1:1 y grupo ──────────────────────────────────
 
 from agent.cognition.stream import run, observe_turn
-from agent.memory import save_turn, get_recent_session_log
+from agent.memory import save_turn, get_recent_channel_log
 from agent.presence.conduits import group_policy
 from agent.presence.conduits.debounce import DebouncePolicy
 
@@ -322,7 +322,7 @@ async def _flush_direct(messages: list) -> None:
 async def _flush_group(messages: list) -> None:
     # Guardar todos los mensajes anteriores al ultimo en el historial individualmente
     for m in messages[:-1]:
-        save_turn(m.person_id, "user", m.text, session_id=m.metadata["session_id"])
+        save_turn(m.person_id, "user", m.text, channel_id=m.metadata["channel_id"])
 
     parsed = messages[-1]
     parsed.metadata["channel_type"] = "group"
@@ -354,17 +354,17 @@ async def _handle_group(parsed: InboundMessage) -> dict:
 
     if decision == "observe":
         asyncio.create_task(
-            observe_turn(parsed.person_id, parsed.text, parsed.metadata["session_id"])
+            observe_turn(parsed.person_id, parsed.text, parsed.metadata["channel_id"])
         )
         return {"status": "observed", "person_id": parsed.person_id}
 
     if decision == "confirm_close":
-        recent = get_recent_session_log(parsed.metadata["session_id"], limit=4)
+        recent = get_recent_channel_log(parsed.metadata["channel_id"], limit=4)
         is_close, short_reply = await group_policy.confirm_closing(parsed.text, recent)
         if is_close:
             save_turn(
                 parsed.person_id, "user", parsed.text,
-                session_id=parsed.metadata["session_id"],
+                channel_id=parsed.metadata["channel_id"],
             )
             try:
                 sent_id = await send_text(
@@ -375,7 +375,7 @@ async def _handle_group(parsed: InboundMessage) -> dict:
                 sent_id = None
             save_turn(
                 parsed.person_id, "assistant", short_reply,
-                session_id=parsed.metadata["session_id"],
+                channel_id=parsed.metadata["channel_id"],
             )
             group_policy.close_window(parsed.remote_jid)
             return {"status": "closed", "person_id": parsed.person_id, "msg_id": sent_id}
@@ -383,14 +383,14 @@ async def _handle_group(parsed: InboundMessage) -> dict:
         # fallthrough → engage_main con debounce
 
     # engage_main (o reabierto tras KEEP): encolar y responder tras ventana de silencio
-    sid = parsed.metadata["session_id"]
-    _debounce.enqueue(sid, parsed, _flush_group)
+    cid = parsed.metadata["channel_id"]
+    _debounce.enqueue(cid, parsed, _flush_group)
     return {"status": "queued", "person_id": parsed.person_id}
 
 
 async def _handle_direct(parsed: InboundMessage) -> dict:
-    sid = parsed.metadata["session_id"]
-    _debounce.enqueue(sid, parsed, _flush_direct)
+    cid = parsed.metadata["channel_id"]
+    _debounce.enqueue(cid, parsed, _flush_direct)
     return {"status": "queued", "person_id": parsed.person_id}
 
 

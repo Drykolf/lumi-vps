@@ -23,13 +23,13 @@ El registro es prosa plana, primera persona, pasado, español neutro colombiano.
 
 ## Tu tarea
 
-1. Lee el historial e identifica las subtramas distintas del periodo. Una subtrama es un tema coherente, no una franja horaria. El mismo tema discutido en dos momentos del día es UNA subtrama. Dos temas distintos uno tras otro son DOS subtramas, aunque hayan compartido sesión.
+1. Lee el historial e identifica las subtramas distintas del periodo. Una subtrama es un tema coherente, no una franja horaria. El mismo tema discutido en dos momentos del día es UNA subtrama. Dos temas distintos uno tras otro son DOS subtramas, aunque hayan compartido canal.
 
-   Al revisar cada sesión, distingue el rol de Lumi:
-   - **Sesión participant**: aparecen turnos `Lumi: ...` en el bloque de sesión. Lumi intervino activamente.
-   - **Sesión observer**: no hay ningún turno `Lumi: ...` — solo turnos de otros usuarios. Lumi estuvo en el canal pero no habló. Que alguien la mencione por nombre en esa sesión NO es lo mismo que ella haber respondido.
+   Al revisar cada canal, distingue el rol de Lumi:
+   - **Canal participant**: aparecen turnos `Lumi: ...` en el bloque de canal. Lumi intervino activamente.
+   - **Canal observer**: no hay ningún turno `Lumi: ...` — solo turnos de otros usuarios. Lumi estuvo en el canal pero no habló. Que alguien la mencione por nombre en ese canal NO es lo mismo que ella haber respondido.
 
-   Para sesiones observer: si la experiencia de estar presente sin intervenir tiene peso emocional real (el grupo habló largo rato sin incluirla, o se habló de algo que la afectó), puede registrarse brevemente en el diario con esa clave — "estuve de observadora". Si fue irrelevante, omitir esa sesión.
+   Para canales observer: si la experiencia de estar presente sin intervenir tiene peso emocional real (el grupo habló largo rato sin incluirla, o se habló de algo que la afectó), puede registrarse brevemente en el diario con esa clave — "estuve de observadora". Si fue irrelevante, omitir ese canal.
 
 2. Para cada subtrama, escribe un párrafo de 3 a 6 oraciones, primera persona, español neutro colombiano. Captura lo que importó: qué pasó, qué notaste, qué sentiste sobre eso, qué quedó abierto. Es escritura de diario, no acta. No produzcas listas de hechos.
 

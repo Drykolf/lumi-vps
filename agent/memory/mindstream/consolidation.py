@@ -48,7 +48,7 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     # 1. Load history rows in the period window
     conn = traces.get_conn()
     history_rows = conn.execute(
-        """SELECT id, user_id, role, content, session_id, ts
+        """SELECT id, user_id, role, content, channel_id, ts
            FROM history
            WHERE ts >= ? AND ts < ?
            ORDER BY ts ASC""",
@@ -107,10 +107,10 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     # 3. Build user message: period bounds + conversation turns + mood snapshots + people
     from agent.cognition.working_memory import format_turns_grouped
     history_dicts = [
-        {"role": r[2], "user_id": r[1], "session_id": r[4], "ts": r[5], "content": r[3]}
+        {"role": r[2], "user_id": r[1], "channel_id": r[4], "ts": r[5], "content": r[3]}
         for r in history_rows
     ]
-    turns_text = format_turns_grouped(history_dicts, current_session_id=None, now=datetime.now(UTC))
+    turns_text = format_turns_grouped(history_dicts, current_channel_id=None, now=datetime.now(UTC))
 
     def _q(val: float, lo: float, mid_lo: float, mid_hi: float, hi: float,
            labels: tuple[str, str, str, str, str]) -> str:
@@ -313,8 +313,8 @@ def _ensure_unique_person_id(proposed: str) -> str:
 
 
 def _slim_transcript(messages: list[dict]) -> list[dict]:
-    """Trim long sessions to the last N messages and drop verbose keys for the
-    LLM payload."""
+    """Trim a long channel transcript to the last N messages and drop verbose
+    keys for the LLM payload."""
     if len(messages) > _MAX_TRANSCRIPT_MSGS_PER_SESSION:
         messages = messages[-_MAX_TRANSCRIPT_MSGS_PER_SESSION:]
     out = []
@@ -337,7 +337,7 @@ async def consolidate_entity_mentions() -> dict:
     """
     from agent.memory.mindstream import mentions as mentions_mod
     from agent.memory.mindstream import social
-    from agent.memory.episodic import get_history_grouped_by_session
+    from agent.memory.episodic import get_history_grouped_by_channel
 
     metrics = {
         "resolved_existing": 0,
@@ -357,9 +357,9 @@ async def consolidate_entity_mentions() -> dict:
     # Build transcripts covering [earliest pending, now]
     earliest = min(m["created_at"] for m in pending)
     now_iso = datetime.now(UTC).isoformat()
-    raw_transcripts = get_history_grouped_by_session(earliest, now_iso)
+    raw_transcripts = get_history_grouped_by_channel(earliest, now_iso)
     transcripts = {
-        sid: _slim_transcript(msgs) for sid, msgs in raw_transcripts.items()
+        cid: _slim_transcript(msgs) for cid, msgs in raw_transcripts.items()
     }
 
     known = social.list_known_persons_minimal()
@@ -376,7 +376,7 @@ async def consolidate_entity_mentions() -> dict:
         pending_payload.append({
             "mention_id": m["mention_id"],
             "history_id": m["history_id"],
-            "session_id": m["session_id"],
+            "channel_id": m["channel_id"],
             "created_at": m["created_at"],
             "source_role": m["source_role"],
             "raw_text": m["raw_text"],
@@ -399,7 +399,7 @@ async def consolidate_entity_mentions() -> dict:
 
     logger.info(
         f"[entity_consolidation] sending to LLM: pending={len(pending)} "
-        f"sessions={len(transcripts)} known={len(known)} relations={len(relations)}"
+        f"channels={len(transcripts)} known={len(known)} relations={len(relations)}"
     )
 
     from agent.expression.synapses import chat, ModelGroup
@@ -598,7 +598,7 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
         get_turns_by_ids,
         get_mood_logs_since,
         get_active_user_ids_in_period,
-        get_session_context_for_user_in_period,
+        get_channel_context_for_user_in_period,
     )
 
     metrics = {
@@ -639,7 +639,7 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
             {
                 "created_at": m["created_at"],
                 "raw_text": m["raw_text"],
-                "session_id": m["session_id"],
+                "channel_id": m["channel_id"],
             }
             for m in mention_rows
         ]
@@ -670,7 +670,7 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
         kp = social.get_known_person(uid)
         if not kp:
             continue
-        turn_excerpts = get_session_context_for_user_in_period(
+        turn_excerpts = get_channel_context_for_user_in_period(
             uid, period_start.isoformat(), now_iso,
             limit=_MAX_MENTIONS_TURN_EXCERPTS_PER_PERSON,
         )
@@ -791,13 +791,13 @@ def _build_per_person_context(
 
     For each affected person (mentioned & consolidated in window, excluding Jose):
       - current identity state (name, aliases, emotional_tone, status, interest_score)
-      - the full transcripts of every session the person appeared in (slimmed)
+      - the full transcripts of every channel the person appeared in (slimmed)
       - the raw mentions in the window
       - optionally: current_relations (only when include_relations=True)
     """
     from agent.memory.mindstream import mentions as mentions_mod
     from agent.memory.mindstream import social
-    from agent.memory.episodic import get_history_grouped_by_session
+    from agent.memory.episodic import get_history_grouped_by_channel
 
     grouped_all = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
     grouped = {pid: rows for pid, rows in grouped_all.items() if pid != "jose"}
@@ -805,11 +805,11 @@ def _build_per_person_context(
         return [], grouped
 
     now_iso = datetime.now(UTC).isoformat()
-    raw_transcripts = get_history_grouped_by_session(
+    raw_transcripts = get_history_grouped_by_channel(
         period_start.isoformat(), now_iso
     )
     transcripts = {
-        sid: _slim_transcript(msgs) for sid, msgs in raw_transcripts.items()
+        cid: _slim_transcript(msgs) for cid, msgs in raw_transcripts.items()
     }
 
     payload_persons: list[dict] = []
@@ -819,18 +819,18 @@ def _build_per_person_context(
             logger.warning(f"[per_person_context] missing known_persons row for {pid}")
             continue
 
-        session_ids_for_person = {m["session_id"] for m in mention_rows}
-        sessions_for_person = {
-            sid: transcripts[sid]
-            for sid in session_ids_for_person
-            if sid in transcripts
+        channel_ids_for_person = {m["channel_id"] for m in mention_rows}
+        channels_for_person = {
+            cid: transcripts[cid]
+            for cid in channel_ids_for_person
+            if cid in transcripts
         }
 
         mentions_summary = [
             {
                 "created_at": m["created_at"],
                 "raw_text": m["raw_text"],
-                "session_id": m["session_id"],
+                "channel_id": m["channel_id"],
                 "history_id": m["history_id"],
             }
             for m in mention_rows
@@ -846,7 +846,7 @@ def _build_per_person_context(
                 "status": kp.get("status"),
                 "interest_score": kp.get("interest_score"),
             },
-            "sessions": sessions_for_person,
+            "channels": channels_for_person,
             "mentions": mentions_summary,
         }
         if include_relations:
@@ -1065,7 +1065,7 @@ _VALID_RELATION_STATUSES = {
 
 async def update_relations(period_start: datetime | None = None) -> dict:
     """Nightly step 4: detect new relations between known persons from the
-    window's sessions, then run `infer_family_relations()` for rule-based
+    window's channels, then run `infer_family_relations()` for rule-based
     derivations.
 
     Only emits relations between person_ids that already exist in
@@ -1327,9 +1327,9 @@ para guardarlos en su memoria semántica de largo plazo (Mem0).
 En el mensaje del usuario:
 1. `now_utc` — timestamp actual.
 2. `subject` — identidad y estado del sujeto (display_name, aliases, emotional_tone, status, relations).
-3. `sessions` — `{{session_id: [{{ts, from, content, history_id}}, ...]}}` con los turnos
+3. `channels` — `{{channel_id: [{{ts, from, content, history_id}}, ...]}}` con los turnos
    donde el sujeto aparece (como hablante o mencionado).
-4. `mentions` — menciones explícitas del sujeto en la ventana (`{{created_at, raw_text, session_id, history_id}}`).
+4. `mentions` — menciones explícitas del sujeto en la ventana (`{{created_at, raw_text, channel_id, history_id}}`).
 
 ## Formato de salida
 
@@ -1375,15 +1375,15 @@ def _build_daily_memories_system_prompt(
 
 def _collect_daily_candidate_person_ids(
     period_start: datetime,
-    sessions: dict[str, list[dict]],
+    channels: dict[str, list[dict]],
     grouped_mentions: dict[str, list[dict]],
 ) -> set[str]:
     """Union of (resolved mentions in window) ∪ (history speakers in window).
-    The window history rows are already loaded into `sessions`."""
+    The window history rows are already loaded into `channels`."""
     candidates: set[str] = set()
     candidates.update(grouped_mentions.keys())
-    for session_rows in sessions.values():
-        for row in session_rows:
+    for channel_rows in channels.values():
+        for row in channel_rows:
             if row.get("role") == "user":
                 uid = row.get("user_id")
                 if uid:
@@ -1393,7 +1393,7 @@ def _collect_daily_candidate_person_ids(
 
 def _build_subject_payload(
     kp: dict,
-    sessions_for_person: dict[str, list[dict]],
+    channels_for_person: dict[str, list[dict]],
     mention_rows: list[dict],
 ) -> dict:
     """Pack the per-person LLM payload."""
@@ -1421,7 +1421,7 @@ def _build_subject_payload(
         {
             "created_at": m["created_at"],
             "raw_text": m["raw_text"],
-            "session_id": m["session_id"],
+            "channel_id": m["channel_id"],
             "history_id": m["history_id"],
         }
         for m in mention_rows
@@ -1430,7 +1430,7 @@ def _build_subject_payload(
     return {
         "now_utc": datetime.now(UTC).isoformat(),
         "subject": subject,
-        "sessions": sessions_for_person,
+        "channels": channels_for_person,
         "mentions": mentions_summary,
     }
 
@@ -1451,7 +1451,7 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
     """
     from agent.memory.mindstream import mentions as mentions_mod
     from agent.memory.mindstream import social
-    from agent.memory.episodic import get_history_grouped_by_session
+    from agent.memory.episodic import get_history_grouped_by_channel
     from agent.memory.semantic import add_memory
 
     metrics = {
@@ -1472,19 +1472,19 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
     )
 
     grouped_mentions = mentions_mod.get_consolidated_since_grouped_by_person(period_start)
-    raw_sessions = get_history_grouped_by_session(period_start.isoformat(), now_iso)
+    raw_channels = get_history_grouped_by_channel(period_start.isoformat(), now_iso)
 
     candidates = _collect_daily_candidate_person_ids(
-        period_start, raw_sessions, grouped_mentions
+        period_start, raw_channels, grouped_mentions
     )
     metrics["candidates"] = len(candidates)
     if not candidates:
         logger.info("[daily_memories] no candidate persons in window")
         return metrics
 
-    # Slim each session once; reused across persons.
-    slim_sessions = {
-        sid: _slim_transcript(msgs) for sid, msgs in raw_sessions.items()
+    # Slim each channel once; reused across persons.
+    slim_channels = {
+        cid: _slim_transcript(msgs) for cid, msgs in raw_channels.items()
     }
 
     from agent.expression.synapses import chat, ModelGroup
@@ -1506,24 +1506,24 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
             continue
 
         mention_rows = grouped_mentions.get(pid, [])
-        # Sessions where this person appears = mentioned sessions ∪ spoke sessions.
-        session_ids_for_person: set[str] = {m["session_id"] for m in mention_rows}
-        for sid, msgs in raw_sessions.items():
+        # Channels where this person appears = mentioned channels ∪ spoke channels.
+        channel_ids_for_person: set[str] = {m["channel_id"] for m in mention_rows}
+        for cid, msgs in raw_channels.items():
             if any(m.get("role") == "user" and m.get("user_id") == pid for m in msgs):
-                session_ids_for_person.add(sid)
+                channel_ids_for_person.add(cid)
 
-        sessions_for_person = {
-            sid: slim_sessions[sid]
-            for sid in session_ids_for_person
-            if sid in slim_sessions
+        channels_for_person = {
+            cid: slim_channels[cid]
+            for cid in channel_ids_for_person
+            if cid in slim_channels
         }
 
-        if not sessions_for_person and not mention_rows:
-            logger.info(f"[daily_memories] skip {pid}: no sessions/mentions found")
+        if not channels_for_person and not mention_rows:
+            logger.info(f"[daily_memories] skip {pid}: no channels/mentions found")
             continue
 
         metrics["persons_evaluated"] += 1
-        payload = _build_subject_payload(kp, sessions_for_person, mention_rows)
+        payload = _build_subject_payload(kp, channels_for_person, mention_rows)
         system_prompt = _build_daily_memories_system_prompt(
             person_id=pid,
             display_name=kp["display_name"],
@@ -1552,7 +1552,7 @@ async def consolidate_daily_memories(period_start: datetime | None = None) -> di
             f"model_group={tier_model_group.name} "
             f"reasoning_effort={tier_reasoning_effort} "
             f"max_tokens={tier_max_tokens} "
-            f"sessions={len(sessions_for_person)} mentions={len(mention_rows)}"
+            f"channels={len(channels_for_person)} mentions={len(mention_rows)}"
         )
 
         try:

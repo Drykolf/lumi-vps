@@ -1,5 +1,5 @@
 """
-SQLite operations — conversation history, session tracking, summaries.
+SQLite operations — conversation history, channel tracking, summaries.
 Stored in data/traces.db via TracesRepository.
 """
 import sqlite3
@@ -11,16 +11,16 @@ UTC = timezone.utc
 
 
 def init_db():
-    """Create all SQLite tables for conversation and session tracking (idempotent)."""
+    """Create all SQLite tables for conversation and channel tracking (idempotent)."""
     traces.init()
 
 
-def save_turn(user_id: str, role: str, content: str, session_id: str = "default") -> int:
+def save_turn(user_id: str, role: str, content: str, channel_id: str = "default") -> int:
     """Guarda un turno de conversacion en SQLite. Retorna el history_id."""
     conn = traces.get_conn()
     cur = conn.execute(
-        "INSERT INTO history (user_id, role, content, session_id, ts) VALUES (?, ?, ?, ?, ?)",
-        (user_id, role, content, session_id, datetime.now(UTC).isoformat())
+        "INSERT INTO history (user_id, role, content, channel_id, ts) VALUES (?, ?, ?, ?, ?)",
+        (user_id, role, content, channel_id, datetime.now(UTC).isoformat())
     )
     conn.commit()
     history_id = cur.lastrowid
@@ -32,7 +32,7 @@ def get_history_since(since_ts: str, limit: int = 200) -> list[dict]:
     """All history rows since a timestamp, ordered by id. Used by mood_check."""
     conn = traces.get_conn()
     rows = conn.execute(
-        """SELECT id, role, content, user_id, session_id, ts
+        """SELECT id, role, content, user_id, channel_id, ts
            FROM history
            WHERE ts >= ?
            ORDER BY id ASC
@@ -43,15 +43,15 @@ def get_history_since(since_ts: str, limit: int = 200) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_recent_session_log(session_id: str,
+def get_recent_channel_log(channel_id: str,
                            since_ts: str | None = None, limit: int = 0) -> list[dict]:
-    """Retorna los turnos de una sesion, en orden cronologico.
+    """Retorna los turnos de un canal, en orden cronologico.
     since_ts (ISO UTC) filtra desde esa marca temporal.
     limit=0 significa ilimitado; limit>0 retorna los ultimos N."""
     conn = traces.get_conn()
     columns = "role, content, user_id, ts"
-    where = "session_id = ?"
-    params = [session_id]
+    where = "channel_id = ?"
+    params = [channel_id]
 
     if since_ts:
         where += " AND ts >= ?"
@@ -78,14 +78,14 @@ def get_recent_session_log(session_id: str,
 
 
 def get_recent_user_log(user_id: str, since_ts: str | None = None,
-                         exclude_session_id: str | None = None,
+                         exclude_channel_id: str | None = None,
                          limit: int = 10) -> list[dict]:
-    """Retorna los ultimos turnos de un usuario a traves de sesiones.
+    """Retorna los ultimos turnos de un usuario a traves de canales.
     since_ts (ISO UTC) filtra desde esa marca temporal.
-    exclude_session_id excluye una sesion especifica (para cross-session).
-    Retorna role, content, user_id, session_id, ts en orden cronologico."""
+    exclude_channel_id excluye un canal especifico (para cross-channel).
+    Retorna role, content, user_id, channel_id, ts en orden cronologico."""
     conn = traces.get_conn()
-    columns = "role, content, user_id, session_id, ts"
+    columns = "role, content, user_id, channel_id, ts"
     where = "user_id = ?"
     params = [user_id]
 
@@ -93,12 +93,12 @@ def get_recent_user_log(user_id: str, since_ts: str | None = None,
         where += " AND ts >= ?"
         params.append(since_ts)
 
-    if exclude_session_id:
-        where += " AND session_id != ?"
-        params.append(exclude_session_id)
+    if exclude_channel_id:
+        where += " AND channel_id != ?"
+        params.append(exclude_channel_id)
 
     rows = conn.execute(
-        f"""SELECT role, content, user_id, session_id, ts FROM (
+        f"""SELECT role, content, user_id, channel_id, ts FROM (
                 SELECT id, {columns} FROM history
                 WHERE {where}
                 ORDER BY id DESC
@@ -108,23 +108,23 @@ def get_recent_user_log(user_id: str, since_ts: str | None = None,
     ).fetchall()
 
     conn.close()
-    return [{"role": r[0], "content": r[1], "user_id": r[2], "session_id": r[3], "ts": r[4]} for r in rows]
+    return [{"role": r[0], "content": r[1], "user_id": r[2], "channel_id": r[3], "ts": r[4]} for r in rows]
 
 
 def add_mood_log(state: dict, trigger_source: str,
-                 session_id: str | None = None,
+                 channel_id: str | None = None,
                  note: str | None = None):
     conn = traces.get_conn()
     conn.execute(
         """INSERT INTO mood_logs
-           (ts, trigger_source, session_id, mood_valence, mood_energy,
+           (ts, trigger_source, channel_id, mood_valence, mood_energy,
             irritation, focus_level, presence_need, state_label,
             emotional_honesty_mode, note)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             datetime.now(UTC).isoformat(),
             trigger_source,
-            session_id,
+            channel_id,
             state.get("mood_valence", 0.3),
             state.get("mood_energy", 0.6),
             state.get("irritation", 0.1),
@@ -175,13 +175,13 @@ async def write_diary_entry(
     return row_id
 
 
-def get_history_grouped_by_session(start_ts: str, end_ts: str) -> dict[str, list[dict]]:
-    """Return history rows in [start_ts, end_ts) grouped by session_id, each
+def get_history_grouped_by_channel(start_ts: str, end_ts: str) -> dict[str, list[dict]]:
+    """Return history rows in [start_ts, end_ts) grouped by channel_id, each
     list ordered chronologically. Used by nightly consolidation to feed
     transcripts to the LLM."""
     conn = traces.get_conn()
     rows = conn.execute(
-        """SELECT id, user_id, role, content, session_id, ts
+        """SELECT id, user_id, role, content, channel_id, ts
            FROM history
            WHERE ts >= ? AND ts < ?
            ORDER BY ts ASC""",
@@ -191,8 +191,8 @@ def get_history_grouped_by_session(start_ts: str, end_ts: str) -> dict[str, list
 
     grouped: dict[str, list[dict]] = {}
     for r in rows:
-        sid = r[4]
-        grouped.setdefault(sid, []).append({
+        cid = r[4]
+        grouped.setdefault(cid, []).append({
             "history_id": r[0],
             "user_id": r[1],
             "role": r[2],
@@ -225,7 +225,7 @@ def get_turns_in_period_by_user(
     get_turns_by_ids so it can be used as turn_excerpts in consolidation payloads."""
     conn = traces.get_conn()
     rows = conn.execute(
-        """SELECT id, user_id, role, content, session_id, ts
+        """SELECT id, user_id, role, content, channel_id, ts
            FROM history
            WHERE user_id = ? AND ts >= ? AND ts < ?
            ORDER BY ts DESC LIMIT ?""",
@@ -233,21 +233,21 @@ def get_turns_in_period_by_user(
     ).fetchall()
     conn.close()
     return [
-        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "session_id": r[4], "ts": r[5]}
+        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "channel_id": r[4], "ts": r[5]}
         for r in reversed(rows)
     ]
 
 
-def get_session_context_for_user_in_period(
+def get_channel_context_for_user_in_period(
     user_id: str,
     period_start: str,
     period_end: str,
     limit: int = 12,
 ) -> list[dict]:
-    """Full session context for a user active in [period_start, period_end).
+    """Full channel context for a user active in [period_start, period_end).
 
-    Finds the sessions the user participated in, then returns up to `limit`
-    turns from those sessions including ALL participants (other users, Lumi)
+    Finds the channels the user participated in, then returns up to `limit`
+    turns from those channels including ALL participants (other users, Lumi)
     so the LLM has enough context to evaluate the interaction. Returns the
     most recent `limit` turns, chronologically ordered.
 
@@ -255,28 +255,28 @@ def get_session_context_for_user_in_period(
     e.g. "sí claro" is meaningless without knowing what was asked.
     """
     conn = traces.get_conn()
-    session_rows = conn.execute(
-        """SELECT DISTINCT session_id FROM history
+    channel_rows = conn.execute(
+        """SELECT DISTINCT channel_id FROM history
            WHERE user_id = ? AND ts >= ? AND ts < ?""",
         (user_id, period_start, period_end),
     ).fetchall()
-    if not session_rows:
+    if not channel_rows:
         conn.close()
         return []
 
-    sessions = [r[0] for r in session_rows]
-    placeholders = ",".join("?" for _ in sessions)
+    channels = [r[0] for r in channel_rows]
+    placeholders = ",".join("?" for _ in channels)
     rows = conn.execute(
-        f"""SELECT id, user_id, role, content, session_id, ts
+        f"""SELECT id, user_id, role, content, channel_id, ts
             FROM history
-            WHERE session_id IN ({placeholders})
+            WHERE channel_id IN ({placeholders})
               AND ts >= ? AND ts < ?
             ORDER BY ts DESC LIMIT ?""",
-        tuple(sessions) + (period_start, period_end, limit),
+        tuple(channels) + (period_start, period_end, limit),
     ).fetchall()
     conn.close()
     return [
-        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "session_id": r[4], "ts": r[5]}
+        {"history_id": r[0], "user_id": r[1], "role": r[2], "content": r[3], "channel_id": r[4], "ts": r[5]}
         for r in reversed(rows)
     ]
 
@@ -289,7 +289,7 @@ def get_turns_by_ids(history_ids: list[int]) -> list[dict]:
     placeholders = ",".join("?" for _ in history_ids)
     conn = traces.get_conn()
     rows = conn.execute(
-        f"""SELECT id, user_id, role, content, session_id, ts
+        f"""SELECT id, user_id, role, content, channel_id, ts
             FROM history
             WHERE id IN ({placeholders})
             ORDER BY ts ASC""",
@@ -302,7 +302,7 @@ def get_turns_by_ids(history_ids: list[int]) -> list[dict]:
             "user_id": r[1],
             "role": r[2],
             "content": r[3],
-            "session_id": r[4],
+            "channel_id": r[4],
             "ts": r[5],
         }
         for r in rows

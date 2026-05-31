@@ -14,7 +14,7 @@ En el mensaje del usuario:
    - `status` (active, decaying, disliked, etc.)
    - `notes` (texto libre con historial corto)
    - `mentions_in_batch` (cantidad de menciones nuevas en este batch)
-   - `mentions` (lista resumida con `created_at`, `raw_text`, `session_id`)
+   - `mentions` (lista resumida con `created_at`, `raw_text`, `channel_id`)
    - `turn_excerpts` (turnos de history donde aparecieron las menciones, con `ts`, `role`, `user_id`, `content`)
    - `relations` (grafo desde/hacia esta persona)
 3. `mood_snapshots` — tu propio estado emocional durante el período (lista cronológica).

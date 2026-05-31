@@ -14,7 +14,7 @@ from pathlib import Path
 
 from agent.expression.synapses import chat, ModelGroup
 from agent.faculties.registry import all_schemas
-from agent.memory import get_recent_session_log, get_known_person
+from agent.memory import get_recent_channel_log, get_known_person
 from agent.substrate.logger import get_logger
 
 logger = get_logger("agent.frame")
@@ -158,7 +158,7 @@ def _build_speaker_card(user_id: str) -> str:
     )
 
 
-def _build_transcript(sid: str, message: str, user_id: str) -> str:
+def _build_transcript(cid: str, message: str, user_id: str) -> str:
     """Build the transcript with prior turns clearly separated from the current
     message. Entity extraction must run ONLY on the current message; prior turns
     are context for tool/memory disambiguation only (see turn_frame_prompt.md)."""
@@ -166,7 +166,7 @@ def _build_transcript(sid: str, message: str, user_id: str) -> str:
     card = _build_speaker_card(user_id)
     if card:
         out += card + "\n\n"
-    turns = get_recent_session_log(sid, limit=4)
+    turns = get_recent_channel_log(cid, limit=4)
     out += "[CONTEXTO RECIENTE — solo para desambiguar referencias; NO extraigas entidades de aquí]\n"
     if turns:
         for t in turns:
@@ -210,7 +210,7 @@ def _parse_json_lenient(content: str):
 async def turn_frame_check(
     user_id: str,
     message: str,
-    sid: str,
+    cid: str,
     metadata: dict | None = None,
     prompt_cache_key: str | None = None,
 ) -> dict:
@@ -224,7 +224,7 @@ async def turn_frame_check(
         .replace("{tastes_index}", "  (sin tastes activos — TODO)")
     )
 
-    transcript = _build_transcript(sid, message, user_id)
+    transcript = _build_transcript(cid, message, user_id)
 
     try:
         response = await chat(
