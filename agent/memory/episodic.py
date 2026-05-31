@@ -140,32 +140,28 @@ def add_mood_log(state: dict, trigger_source: str,
 
 
 async def write_diary_entry(
-    period_start: datetime,
-    period_end: datetime,
-    talked_at_ts: datetime,
-    thread_span_minutes: int | None,
-    user_ids: list[str],
-    topic_label: str | None,
-    summary: str,
-    lumi_state: dict | None,
-    entry_type: str = "daily_thread",
+    date: str,
+    people: list[str],
+    threads: list[str],
+    page: str,
+    mood: dict | None,
+    entry_type: str = "daily_page",
 ) -> int:
-    """Insert a single diary entry into traces.db. Returns the new row id."""
+    """Upsert the diary page for `date` (YYYY-MM-DD) into traces.db.
+
+    `date` is UNIQUE, so a re-run for the same day overwrites the prior page
+    (idempotent self-healing). Returns the row id."""
     conn = traces.get_conn()
     cur = conn.execute(
-        """INSERT INTO diary
-           (period_start, period_end, talked_at_ts, thread_span_minutes,
-            user_ids, topic_label, summary, lumi_state, entry_type)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        """INSERT OR REPLACE INTO diary
+           (date, people, threads, page, mood, entry_type)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
-            period_start.isoformat(),
-            period_end.isoformat(),
-            talked_at_ts.isoformat(),
-            thread_span_minutes,
-            json.dumps(user_ids, ensure_ascii=False),
-            topic_label,
-            summary,
-            json.dumps(lumi_state, ensure_ascii=False) if lumi_state else None,
+            date,
+            json.dumps(people, ensure_ascii=False),
+            json.dumps(threads, ensure_ascii=False),
+            page,
+            json.dumps(mood, ensure_ascii=False) if mood else None,
             entry_type,
         ),
     )
@@ -339,13 +335,12 @@ def get_mood_logs_since(start_ts: str) -> list[dict]:
 async def read_recent_diary_entries(
     user_id: str | None = None,
     limit: int = 7,
-    entry_type: str | None = "daily_thread",
+    entry_type: str | None = "daily_page",
 ) -> list[dict]:
-    """Return the most recent diary entries, newest first.
-    If user_id is provided, filter by user_ids JSON array.
+    """Return the most recent diary pages, newest first (by date).
+    If user_id is provided, filter by the `people` JSON array.
     If entry_type is None, all entry types are returned.
-    Returns parsed fields: datetimes as datetime objects, user_ids as list,
-    lumi_state as dict or None."""
+    Returns parsed fields: people/threads as lists, mood as dict or None."""
     conn = traces.get_conn()
     where = ""
     params: list = []
@@ -355,14 +350,13 @@ async def read_recent_diary_entries(
         params.append(entry_type)
 
     if user_id is not None:
-        where += f" {'AND' if where else 'WHERE'} user_ids LIKE ?"
+        where += f" {'AND' if where else 'WHERE'} people LIKE ?"
         params.append(f'%"{user_id}"%')
 
     rows = conn.execute(
-        f"""SELECT id, period_start, period_end, talked_at_ts, thread_span_minutes,
-                   user_ids, topic_label, summary, lumi_state, entry_type, created_at
+        f"""SELECT id, date, people, threads, page, mood, entry_type, created_at
             FROM diary{where}
-            ORDER BY period_end DESC, talked_at_ts DESC
+            ORDER BY date DESC
             LIMIT ?""",
         params + [limit],
     ).fetchall()
@@ -372,43 +366,38 @@ async def read_recent_diary_entries(
     for r in rows:
         results.append({
             "id": r[0],
-            "period_start": datetime.fromisoformat(r[1]),
-            "period_end": datetime.fromisoformat(r[2]),
-            "talked_at_ts": datetime.fromisoformat(r[3]),
-            "thread_span_minutes": r[4],
-            "user_ids": json.loads(r[5]) if r[5] else [],
-            "topic_label": r[6],
-            "summary": r[7],
-            "lumi_state": json.loads(r[8]) if r[8] else None,
-            "entry_type": r[9],
-            "created_at": datetime.fromisoformat(r[10]) if r[10] else None,
+            "date": r[1],
+            "people": json.loads(r[2]) if r[2] else [],
+            "threads": json.loads(r[3]) if r[3] else [],
+            "page": r[4],
+            "mood": json.loads(r[5]) if r[5] else None,
+            "entry_type": r[6],
+            "created_at": datetime.fromisoformat(r[7]) if r[7] else None,
         })
 
     return results
 
 
 def get_diary_as_book(days: int = 2) -> str:
-    """Return recent diary entries formatted as dated journal pages.
+    """Return recent diary pages formatted as dated journal entries.
 
-    Fetches `daily_thread` entries from the last `days` calendar days (UTC),
-    groups them by date, and formats them as plain text pages — one date header
-    per day followed by each entry's summary as a paragraph, ordered
-    chronologically within each day. Returns an empty string when no entries
-    exist in the window.
+    Fetches `daily_page` entries from the last `days` calendar days (UTC) and
+    formats them as plain text — one date header per day followed by that day's
+    page. Returns an empty string when no pages exist in the window.
 
     Intended for injection into the diary-generation prompt so the model can
     maintain continuity of voice and avoid repeating topics.
     """
     now = datetime.now(timezone.utc)
-    cutoff = (now - timedelta(days=days)).isoformat()
+    cutoff = (now - timedelta(days=days)).date().isoformat()  # 'YYYY-MM-DD'
 
     conn = traces.get_conn()
     rows = conn.execute(
-        """SELECT talked_at_ts, topic_label, summary
+        """SELECT date, page
            FROM diary
-           WHERE entry_type = 'daily_thread'
-             AND talked_at_ts >= ?
-           ORDER BY talked_at_ts ASC""",
+           WHERE entry_type = 'daily_page'
+             AND date >= ?
+           ORDER BY date ASC""",
         (cutoff,),
     ).fetchall()
     conn.close()
@@ -416,16 +405,5 @@ def get_diary_as_book(days: int = 2) -> str:
     if not rows:
         return ""
 
-    # Group by UTC date string (YYYY-MM-DD).
-    from collections import defaultdict
-    by_date: dict[str, list[str]] = defaultdict(list)
-    for talked_at_raw, topic_label, summary in rows:
-        date_str = talked_at_raw[:10]  # "YYYY-MM-DD"
-        by_date[date_str].append(summary)
-
-    pages: list[str] = []
-    for date_str in sorted(by_date):
-        block = f"{date_str} UTC\n" + "\n\n".join(by_date[date_str])
-        pages.append(block)
-
+    pages = [f"{date_str}\n{page}" for date_str, page in rows]
     return "\n\n---\n\n".join(pages)

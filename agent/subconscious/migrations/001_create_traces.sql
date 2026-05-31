@@ -22,40 +22,36 @@ CREATE TABLE IF NOT EXISTS history (
 -- ============================================================
 -- DIARY — Lumi's narrative log
 -- ============================================================
--- Topic-thread-level entries produced by the nightly consolidation cron.
--- One row per coherent topic identified by the LLM during the period window.
--- Replaces the previous session_summaries table.
+-- One row per day: a single first-person "page" written by the nightly
+-- consolidation cron, covering everything that happened that day. Replaces the
+-- previous topic-thread model (one row per topic).
 --
 -- entry_type allows future extensions:
---   'daily_thread'  — produced by generate_daily_diary (current)
+--   'daily_page'    — produced by generate_daily_diary (current)
 --   'introspection' — reserved for weekly self-reflection (future)
 --   'milestone'     — reserved for relational milestones (future)
+--
+-- NOTE: the schema below replaces the old topic-thread table (period_start/end,
+-- talked_at_ts, thread_span_minutes, topic_label, summary, lumi_state). Diary
+-- rows are regenerated nightly, so the DROP discards disposable history.
 
+--DROP TABLE IF EXISTS diary;
 CREATE TABLE IF NOT EXISTS diary (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    period_start TEXT NOT NULL,           -- UTC ISO-8601, batch window start
-    period_end   TEXT NOT NULL,           -- UTC ISO-8601, batch window end
-
-    talked_at_ts        TEXT NOT NULL,    -- UTC ISO-8601, representative moment of the thread
-    thread_span_minutes INTEGER,          -- duration of the thread, NULL if single-turn
-    user_ids            TEXT NOT NULL,    -- JSON array of human participants
-    topic_label         TEXT,             -- short snake_case tag
-    summary             TEXT NOT NULL,    -- first-person paragraph in Colombian neutral Spanish
-
-    lumi_state TEXT CHECK (lumi_state IS NULL OR json_valid(lumi_state)),
-        -- JSON: mood snapshot from mood_logs closest to talked_at_ts
-
-    entry_type TEXT NOT NULL DEFAULT 'daily_thread',
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    date       TEXT NOT NULL UNIQUE,   -- 'YYYY-MM-DD', the day summarized
+    people     TEXT NOT NULL,          -- JSON array of human user_ids
+    threads    TEXT,                   -- JSON array of snake_case topic tags (index)
+    page       TEXT NOT NULL,          -- first-person prose, Colombian neutral Spanish
+    mood       TEXT CHECK (mood IS NULL OR json_valid(mood)),
+        -- JSON: daily-average mood snapshot (5 dims + state_label + honesty flag)
+    entry_type TEXT NOT NULL DEFAULT 'daily_page',
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
 
-    CHECK (entry_type IN ('daily_thread', 'introspection', 'milestone'))
+    CHECK (entry_type IN ('daily_page', 'introspection', 'milestone'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_diary_period_end ON diary(period_end DESC);
-CREATE INDEX IF NOT EXISTS idx_diary_talked_at  ON diary(talked_at_ts DESC);
-CREATE INDEX IF NOT EXISTS idx_diary_topic      ON diary(topic_label);
-CREATE INDEX IF NOT EXISTS idx_diary_type_end   ON diary(entry_type, period_end DESC);
+CREATE INDEX IF NOT EXISTS idx_diary_date      ON diary(date DESC);
+CREATE INDEX IF NOT EXISTS idx_diary_type_date ON diary(entry_type, date DESC);
 
 -- ============================================================
 -- HEARTBEAT_RUNS — execution log for scheduled tasks

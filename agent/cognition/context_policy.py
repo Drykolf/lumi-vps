@@ -193,101 +193,13 @@ def memory_queries_from_frame(frame: dict) -> list[str]:
     return out
 
 
-def entity_names_from_context(entities_context: list | None) -> list[str]:
-    """Nombres en minúscula de las entidades resueltas del turno."""
-    names = [
-        (c.get("display_name") or c.get("raw_name") or "").lower()
-        for c in (entities_context or [])
-    ]
-    return [n for n in names if n]
-
-
-# ── Diario (§4/§8, Fase 4) ────────────────────────────────────────────────────
-# Pool = 7 entradas más recientes (read_recent_diary_entries, newest-first).
-# La relevancia se mide contra las QUERIES del memory_plan + nombres de entidad,
-# no contra las palabras crudas del mensaje. En la rama emocional manda la
-# recencia (la continuidad emocional es temporal, no temática).
-#
-# TODO (quiescence): que la consolidación nocturna (generate_daily_diary) emita
-# 3–5 tags de tópico por entrada y matchear sobre esos tags en vez del overlap
-# léxico contra el summary. El LLM ya corre a las 3 AM escribiendo el summary;
-# añadir "emite también topics: [...]" al diary_prompt.md hace el matching
-# robusto para siempre.
-
-DIARY_MAX_ENTRIES = 3          # tope general para relevant_only / relevant_if_entity
-DIARY_EMOTIONAL_MAX = 2        # rama emocional: pocas, recientes
-DIARY_RECENCY_WINDOW = 3       # ventana de recencia sobre la que actúa el gate suave
-_DIARY_MIN_TERM_LEN = 4
-
+# ── Diario ────────────────────────────────────────────────────────────────────
+# El diario se controla por modo: 'omit' no inyecta; cualquier otro valor carga
+# siempre la última página (sin selección por relevancia). El render vive en
+# working_memory._build_diary_suffix.
 
 def diary_rule_for_mode(mode: str | None) -> str:
     """Regla de diario para el modo. Default seguro: 'omit'."""
     if mode and mode in MODE_POLICY:
         return MODE_POLICY[mode]["diary"]
     return "omit"
-
-
-def _diary_terms(queries: list | None, entity_names: list | None) -> set:
-    terms: set = set()
-    for q in queries or []:
-        for w in str(q).lower().split():
-            if len(w) >= _DIARY_MIN_TERM_LEN:
-                terms.add(w)
-    for n in entity_names or []:
-        if n:
-            terms.add(str(n).lower())
-    return terms
-
-
-def _diary_overlap(summary: str | None, terms: set) -> int:
-    blob = (summary or "").lower()
-    return sum(1 for t in terms if t in blob)
-
-
-def select_diary(
-    entries: list,
-    rule: str,
-    queries: list | None,
-    entity_names: list | None,
-    user_emotion: dict | None,
-    max_entries: int = DIARY_MAX_ENTRIES,
-) -> list:
-    """Selección determinística de entradas de diario. `entries` viene
-    newest-first. Devuelve [] si no hay señal de relevancia (omitir el bloque)."""
-    if not entries or rule == "omit":
-        return []
-
-    if rule == "relevant_if_emotional":
-        # Recencia primero, con gate suave de relevancia: sólo si la emoción es
-        # intensa, y reordenando dentro de la ventana reciente por overlap.
-        ue = user_emotion or {}
-        if float(ue.get("intensity") or 0.0) < 0.5:
-            return []
-        window = entries[:DIARY_RECENCY_WINDOW]
-        terms = _diary_terms(queries, entity_names)
-        if terms:
-            window = sorted(
-                window, key=lambda e: _diary_overlap(e.get("summary"), terms), reverse=True
-            )
-        return window[:DIARY_EMOTIONAL_MAX]
-
-    if rule == "relevant_if_entity":
-        names = [str(n).lower() for n in (entity_names or []) if n]
-        if not names:
-            return []
-        hits = [
-            e for e in entries
-            if any(n in (e.get("summary") or "").lower() for n in names)
-        ]
-        return hits[:max_entries]
-
-    if rule == "relevant_only":
-        terms = _diary_terms(queries, entity_names)
-        if not terms:
-            return []  # sin señal temática → omitir
-        scored = [(_diary_overlap(e.get("summary"), terms), e) for e in entries]
-        scored = [(s, e) for s, e in scored if s > 0]
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [e for _, e in scored[:max_entries]]
-
-    return []

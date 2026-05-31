@@ -4,7 +4,7 @@ Nightly LLM consolidation:
     persons, deletes anonymous mentions.
   - consolidate_person_interest: evaluates per-person interest deltas based on
     the day's consolidated mentions.
-  - generate_daily_diary: produces topic-thread diary entries.
+  - generate_daily_diary: produces a single diary page per day.
 """
 import json
 import re
@@ -33,18 +33,18 @@ def _build_diary_system_prompt() -> str:
     if _cached_diary_system is not None:
         return _cached_diary_system
     parts = []
-    for rel in ("lumi_soul.md", "attitude.md"):
-        fp = _IDENTITY_DIR / rel
-        if fp.exists():
-            parts.append(fp.read_text(encoding="utf-8"))
+    soul = _IDENTITY_DIR / "lumi_soul.md"
+    if soul.exists():
+        parts.append(soul.read_text(encoding="utf-8"))
     parts.append(_DIARY_EXTRACTION_PROMPT)
     _cached_diary_system = "\n\n---\n\n".join(parts)
     return _cached_diary_system
 
 
 async def generate_daily_diary(period_start: datetime, period_end: datetime) -> int:
-    """Generate and persist diary entries for the [period_start, period_end) window.
-    Returns the count of entries written (0 if the period was too quiet)."""
+    """Generate and persist the diary page for the [period_start, period_end) window.
+    The page is dated by period_start's calendar day. Returns 1 if a page was
+    written, 0 if the period was too quiet (too few turns or an empty page)."""
     # 1. Load history rows in the period window
     conn = traces.get_conn()
     history_rows = conn.execute(
@@ -153,7 +153,13 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
         if prior_diary else ""
     )
 
+    # Date deterministically computed from the window start (3 AM → 3 AM windows
+    # mean period_start's date is the day whose activity the page covers). The
+    # LLM emits a `date` too, but we persist this one — not the model's.
+    target_date = period_start.date().isoformat()
+
     user_msg = (
+        f"Día a escribir (target_date): {target_date}\n"
         f"Period: {period_start.isoformat()} to {period_end.isoformat()}\n\n"
         f"{honesty_block}"
         f"{prior_diary_block}"
@@ -162,7 +168,8 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
         f"People involved:\n{persons_text}"
     )
 
-    logger.info(f"[diary] generating for period {period_start.isoformat()} -> {period_end.isoformat()} "
+    logger.info(f"[diary] generating page for {target_date} "
+                f"({period_start.isoformat()} -> {period_end.isoformat()}) "
                 f"| turns={len(history_rows)} | moods={len(mood_rows)}")
 
     # 4. Invoke LLM
@@ -178,7 +185,7 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
     )
     content = response.get("content", "").strip()
 
-    # 5. Parse and validate JSON
+    # 5. Parse and validate JSON (single page object: date/people/threads/page)
     match = re.search(r"\{.*\}", content, re.DOTALL)
     if not match:
         logger.error(f"[diary] no JSON in LLM response, raw: {content[:500]}")
@@ -190,82 +197,72 @@ async def generate_daily_diary(period_start: datetime, period_end: datetime) -> 
         logger.error(f"[diary] JSON parse error: {e}, raw: {content[:500]}")
         raise
 
-    entries = data.get("entries", [])
-    if not isinstance(entries, list):
-        logger.error(f"[diary] entries is not a list: {type(entries)}")
-        raise ValueError("Diary LLM returned invalid entries format")
-
-    if not entries:
-        logger.info(f"[diary] LLM returned 0 entries for period")
+    page = data.get("page")
+    if not page or not str(page).strip():
+        logger.info(f"[diary] LLM returned empty page for {target_date}, skipping")
         return 0
 
-    # 6. For each entry, look up closest mood snapshot and persist
-    written = 0
-    for entry in entries:
-        try:
-            talked_at = datetime.fromisoformat(entry["talked_at_ts"].replace("Z", "+00:00"))
-        except (KeyError, ValueError) as e:
-            logger.warning(f"[diary] invalid talked_at_ts in entry, skipping: {e}")
-            continue
+    people = data.get("people") or []
+    threads = data.get("threads") or []
+    if not isinstance(people, list):
+        people = []
+    if not isinstance(threads, list):
+        threads = []
 
-        # Look up mood snapshot closest to talked_at_ts
-        conn = traces.get_conn()
-        mood_snapshot = conn.execute(
-            """SELECT ts, mood_valence, mood_energy, irritation, focus_level,
-                      presence_need, state_label, emotional_honesty_mode
-               FROM mood_logs
-               WHERE ts >= ?
-               ORDER BY ts ASC
-               LIMIT 1""",
-            (talked_at.isoformat(),),
-        ).fetchone()
+    # 6. Daily-average mood snapshot (reference metadata; not consumed yet).
+    mood = _daily_mood_average(mood_rows)
 
-        if mood_snapshot is None:
-            mood_snapshot = conn.execute(
-                """SELECT ts, mood_valence, mood_energy, irritation, focus_level,
-                          presence_need, state_label, emotional_honesty_mode
-                   FROM mood_logs
-                   WHERE ts <= ?
-                   ORDER BY ts DESC
-                   LIMIT 1""",
-                (talked_at.isoformat(),),
-            ).fetchone()
-        conn.close()
+    from agent.memory.episodic import write_diary_entry
+    await write_diary_entry(
+        date=target_date,
+        people=people,
+        threads=threads,
+        page=str(page).strip(),
+        mood=mood,
+    )
 
-        lumi_state = None
-        if mood_snapshot is not None:
-            lumi_state = {
-                "mood_valence": mood_snapshot[1],
-                "mood_energy": mood_snapshot[2],
-                "irritation": mood_snapshot[3],
-                "focus_level": mood_snapshot[4],
-                "presence_need": mood_snapshot[5],
-                "state_label": mood_snapshot[6],
-                "emotional_honesty_mode": bool(mood_snapshot[7]),
-                "sampled_at_ts": mood_snapshot[0],
-            }
+    logger.info(f"[diary] persisted page for {target_date} "
+                f"| people={people} threads={threads}")
+    return 1
 
-        # TODO (Context Governor / Fase 4): hacer que diary_prompt.md emita
-        # también 3–5 tags de tópico por entrada (p.ej. entry["topics"]) y
-        # persistirlos. El selector de diario (context_policy.select_diary) hoy
-        # hace overlap léxico contra el summary; matchear contra tags sería
-        # mucho más robusto y cuesta casi nada aquí (el LLM ya escribe el summary).
-        from agent.memory.episodic import write_diary_entry
-        await write_diary_entry(
-            period_start=period_start,
-            period_end=period_end,
-            talked_at_ts=talked_at,
-            thread_span_minutes=entry.get("thread_span_minutes"),
-            user_ids=entry.get("user_ids", []),
-            topic_label=entry.get("topic_label"),
-            summary=entry.get("summary", ""),
-            lumi_state=lumi_state,
-        )
-        written += 1
 
-    logger.info(f"[diary] persisted {written} entries for period "
-                f"{period_start.isoformat()} -> {period_end.isoformat()}")
-    return written
+def _daily_mood_average(mood_rows: list) -> dict | None:
+    """Collapse the day's mood_logs rows into one average snapshot.
+
+    Each row: (ts, mood_valence, mood_energy, irritation, focus_level,
+    presence_need, state_label, emotional_honesty_mode). Returns None when the
+    window had no mood samples."""
+    if not mood_rows:
+        return None
+
+    from collections import Counter
+    n = len(mood_rows)
+
+    def _avg(idx: int) -> float:
+        return round(sum(r[idx] for r in mood_rows) / n, 4)
+
+    # Representative state_label: most frequent, ties broken by the latest row.
+    labels = [r[6] for r in mood_rows if r[6]]
+    state_label = None
+    if labels:
+        counts = Counter(labels)
+        top = max(counts.values())
+        # Walk rows newest-first so a tie resolves to the most recent label.
+        for r in reversed(mood_rows):
+            if r[6] and counts[r[6]] == top:
+                state_label = r[6]
+                break
+
+    return {
+        "mood_valence": _avg(1),
+        "mood_energy": _avg(2),
+        "irritation": _avg(3),
+        "focus_level": _avg(4),
+        "presence_need": _avg(5),
+        "state_label": state_label,
+        "emotional_honesty_mode": any(bool(r[7]) for r in mood_rows),
+        "samples": n,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

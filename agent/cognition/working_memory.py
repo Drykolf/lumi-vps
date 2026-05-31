@@ -14,8 +14,6 @@ from agent.cognition.context_policy import (
     cross_channel_rule_for_mode,
     select_cross_channel,
     diary_rule_for_mode,
-    select_diary,
-    entity_names_from_context,
     apply_voice_overlays,
     IDENTITY_PULSE_TEXT,
     TARGET_MAX_TOKENS,
@@ -96,34 +94,21 @@ def get_cached_prefix() -> str:
 async def _build_diary_suffix(
     user_id: str,
     conversation_mode: str | None = None,
-    memory_queries: list[str] | None = None,
-    entity_names: list[str] | None = None,
-    user_emotion: dict | None = None,
 ) -> str | None:
-    """Fase 4: el diario se controla por modo. Pool = 7 entradas más recientes;
-    se seleccionan 1–3 relevantes (o se omite el bloque si no hay relevancia).
-    La relevancia se mide contra las queries del memory_plan + nombres de
-    entidad, salvo la rama emocional que prioriza recencia."""
-    rule = diary_rule_for_mode(conversation_mode)
-    if rule == "omit":
+    """El diario se controla por modo: en modos 'omit' (chat ligero, tool, etc.)
+    no se inyecta. En el resto se carga siempre la página más reciente — sin
+    filtro por usuario ni matching temático."""
+    if diary_rule_for_mode(conversation_mode) == "omit":
         return None
-    diary = await read_recent_diary_entries(user_id=user_id, limit=7)
+    diary = await read_recent_diary_entries(limit=1)
     if not diary:
         return None
-    selected = select_diary(diary, rule, memory_queries, entity_names, user_emotion)
-    if not selected:
-        return None
-    # Render cronológico (más antigua primero).
-    selected = sorted(selected, key=lambda e: e.get("talked_at_ts") or datetime.min.replace(tzinfo=UTC))
-    lines = []
-    for entry in selected:
-        label = entry.get("topic_label") or "sin_etiqueta"
-        talked = entry.get("talked_at_ts")
-        ts_str = talked.strftime("%d/%m/%Y %H:%M UTC") if talked else "?"
-        users = ", ".join(entry.get("user_ids", []))
-        header = f"[Diary entry — {ts_str} — topic: {label} — with: {users}]"
-        lines.append(f"{header}\n{entry['summary']}")
-    return "[Entradas recientes del diario de Lumi]\n" + "\n\n".join(lines)
+    entry = diary[0]
+    date = entry.get("date") or "?"
+    threads = ", ".join(entry.get("threads", [])) or "—"
+    people = ", ".join(entry.get("people", [])) or "—"
+    header = f"[Página del diario — {date} — temas: {threads} — con: {people}]"
+    return f"[Página reciente del diario de Lumi]\n{header}\n{entry.get('page', '')}"
 
 
 def _dedup_memories(memories: list[str], recent_turns: list[dict]) -> list[str]:
@@ -467,13 +452,10 @@ async def _build_dynamic_suffix(
     except Exception as e:  # noqa: BLE001 — best-effort, no bloqueante
         logger.warning("evolution.injection.rules.failed: %s", e)
 
-    # 7. Diario reciente relevante (§4) — baja a la zona del frame.
+    # 7. Diario reciente — última página, gateada por modo. Baja a la zona del frame.
     diary_block = await _build_diary_suffix(
         user_id,
         conversation_mode=conversation_mode,
-        memory_queries=memory_queries,
-        entity_names=entity_names_from_context(entities_context),
-        user_emotion=user_emotion,
     )
     if diary_block:
         blocks.append(("diary", diary_block))

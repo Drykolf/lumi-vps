@@ -281,33 +281,33 @@ async def consolidate_daily_memories() -> dict:
 # ── Step 6 ─────────────────────────────────────────────────────────────────────
 
 async def extract_daily_learnings() -> dict:
-    """Generate diary entries for the period since the last diary run.
+    """Generate the diary page(s) for the period since the last diary run.
 
-    Self-healing via `MAX(period_end) FROM diary` — independent of
-    heartbeat_state bookmark (the diary table itself is the authoritative log).
+    Self-healing via the `quiescence.extract_daily_learnings` heartbeat_state
+    bookmark (stamped by _run_step/rhythm_task on success), like the other
+    nightly steps. If the gap spans more than a day (a missed night), the window
+    is sliced into ~24h chunks and one page is written per day, each dated by its
+    chunk start. UNIQUE(date) + INSERT OR REPLACE keeps re-runs idempotent.
     """
     from agent.memory.mindstream.consolidation import generate_daily_diary
-    from agent.subconscious import traces
 
     period_end = datetime.now(UTC)
+    last = await get_last_success("quiescence.extract_daily_learnings")
+    if last is None:
+        last = period_end - timedelta(hours=24)  # first run / never succeeded
 
-    conn = traces.get_conn()
-    row = conn.execute(
-        "SELECT MAX(period_end) FROM diary"
-    ).fetchone()
-    conn.close()
+    total_written = 0
+    ws = last
+    while ws < period_end:
+        we = min(ws + timedelta(hours=24), period_end)
+        total_written += await generate_daily_diary(ws, we)
+        ws = we
 
-    if row and row[0]:
-        period_start = datetime.fromisoformat(row[0])
-    else:
-        period_start = period_end - timedelta(hours=24)
-
-    written = await generate_daily_diary(period_start, period_end)
-    logger.info(f"[diary] nightly run | period_start={period_start.isoformat()} "
-                f"period_end={period_end.isoformat()} | entries={written}")
+    logger.info(f"[diary] nightly run | period_start={last.isoformat()} "
+                f"period_end={period_end.isoformat()} | pages={total_written}")
     return {
-        "entries_written": written,
-        "period_start": period_start.isoformat(),
+        "entries_written": total_written,
+        "period_start": last.isoformat(),
         "period_end": period_end.isoformat(),
     }
 
