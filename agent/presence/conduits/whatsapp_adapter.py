@@ -298,7 +298,7 @@ def parse_inbound(payload: dict) -> InboundMessage | Skip:
 # ── Orquestación: dispatch entre 1:1 y grupo ──────────────────────────────────
 
 from agent.cognition.stream import run, observe_turn
-from agent.memory import save_turn, get_recent_channel_log
+from agent.memory import save_turn
 from agent.presence.conduits import group_policy
 from agent.presence.conduits.debounce import DebouncePolicy
 
@@ -339,9 +339,7 @@ async def _flush_group(messages: list) -> None:
     except Exception as e:
         logger.error(f"[flush_group] sendText failed: {e}")
         return
-    group_policy.register_lumi_response(
-        parsed.remote_jid, sent_id, user_msg_text=parsed.text
-    )
+    group_policy.register_lumi_response(parsed.remote_jid, sent_id)
 
 
 # ── Handlers de entrada ───────────────────────────────────────────────────────
@@ -358,31 +356,7 @@ async def _handle_group(parsed: InboundMessage) -> dict:
         )
         return {"status": "observed", "person_id": parsed.person_id}
 
-    if decision == "confirm_close":
-        recent = get_recent_channel_log(parsed.metadata["channel_id"], limit=4)
-        is_close, short_reply = await group_policy.confirm_closing(parsed.text, recent)
-        if is_close:
-            save_turn(
-                parsed.person_id, "user", parsed.text,
-                channel_id=parsed.metadata["channel_id"],
-            )
-            try:
-                sent_id = await send_text(
-                    parsed.instance, parsed.remote_jid, short_reply
-                )
-            except Exception as e:
-                logger.error(f"sendText (close) failed: {e}")
-                sent_id = None
-            save_turn(
-                parsed.person_id, "assistant", short_reply,
-                channel_id=parsed.metadata["channel_id"],
-            )
-            group_policy.close_window(parsed.remote_jid)
-            return {"status": "closed", "person_id": parsed.person_id, "msg_id": sent_id}
-        group_policy.reopen_window(parsed.remote_jid)
-        # fallthrough → engage_main con debounce
-
-    # engage_main (o reabierto tras KEEP): encolar y responder tras ventana de silencio
+    # engage_main: encolar y responder tras la ventana de silencio del debounce
     cid = parsed.metadata["channel_id"]
     _debounce.enqueue(cid, parsed, _flush_group)
     return {"status": "queued", "person_id": parsed.person_id}
