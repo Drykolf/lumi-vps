@@ -759,8 +759,10 @@ async def consolidate_person_interest(period_start: datetime | None = None) -> d
 
         new_tone = d.get("new_emotional_tone")
         if new_tone and isinstance(new_tone, str):
-            social.set_emotional_tone(pid, new_tone)
-            metrics["tone_updates"] += 1
+            # set_emotional_tone rejects (returns None) any tone outside the
+            # DB-allowed set, so only count tones that were actually written.
+            if social.set_emotional_tone(pid, new_tone) is not None:
+                metrics["tone_updates"] += 1
 
         reason = d.get("reason", "")
         logger.info(

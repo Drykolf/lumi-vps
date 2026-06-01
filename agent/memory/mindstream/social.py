@@ -20,6 +20,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from agent.subconscious import core
+from agent.substrate.logger import get_logger
+
+logger = get_logger("memory.social")
 
 UTC = timezone.utc
 
@@ -164,16 +167,18 @@ def ensure_known_person(
     aliases_json = json.dumps(parse_aliases(aliases), ensure_ascii=False)
 
     conn = core.get_conn()
-    conn.execute(
-        """INSERT OR IGNORE INTO known_persons
-           (person_id, display_name, canonical_name, canonical_name_norm,
-            aliases_json, interest_score, emotional_tone, status, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (person_id, display, canonical, canonical_norm,
-         aliases_json, interest_score, emotional_tone, status, notes),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO known_persons
+               (person_id, display_name, canonical_name, canonical_name_norm,
+                aliases_json, interest_score, emotional_tone, status, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (person_id, display, canonical, canonical_norm,
+             aliases_json, interest_score, emotional_tone, status, notes),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return get_known_person(person_id)
 
 
@@ -201,25 +206,33 @@ def update_known_person(person_id: str, **kwargs) -> dict | None:
     set_clause = ", ".join(f"{k} = ?" for k in updates)
     values = list(updates.values()) + [person_id]
     conn = core.get_conn()
-    conn.execute(
-        f"UPDATE known_persons SET {set_clause} WHERE person_id = ?", values
-    )
-    conn.commit()
-    conn.close()
+    # try/finally is load-bearing: a failed execute (e.g. a CHECK-constraint
+    # IntegrityError) must still close the connection, otherwise the open write
+    # transaction keeps core.db write-locked and every later writer in the same
+    # run dies with "database is locked" (see nightly quiescence cascade).
+    try:
+        conn.execute(
+            f"UPDATE known_persons SET {set_clause} WHERE person_id = ?", values
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return get_known_person(person_id)
 
 
 def increment_person_mention(person_id: str) -> dict | None:
     conn = core.get_conn()
-    conn.execute(
-        """UPDATE known_persons
-           SET mention_count = mention_count + 1,
-               last_mentioned = datetime('now')
-           WHERE person_id = ?""",
-        (person_id,),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """UPDATE known_persons
+               SET mention_count = mention_count + 1,
+                   last_mentioned = datetime('now')
+               WHERE person_id = ?""",
+            (person_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return get_known_person(person_id)
 
 
@@ -260,31 +273,47 @@ def bump_mention(person_id: str, count: int = 1,
     if count <= 0:
         return get_known_person(person_id)
     conn = core.get_conn()
-    if last_seen_ts:
-        conn.execute(
-            """UPDATE known_persons
-               SET mention_count = mention_count + ?,
-                   last_mentioned = ?
-               WHERE person_id = ?""",
-            (count, last_seen_ts, person_id),
-        )
-    else:
-        conn.execute(
-            """UPDATE known_persons
-               SET mention_count = mention_count + ?,
-                   last_mentioned = datetime('now')
-               WHERE person_id = ?""",
-            (count, person_id),
-        )
-    conn.commit()
-    conn.close()
+    try:
+        if last_seen_ts:
+            conn.execute(
+                """UPDATE known_persons
+                   SET mention_count = mention_count + ?,
+                       last_mentioned = ?
+                   WHERE person_id = ?""",
+                (count, last_seen_ts, person_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE known_persons
+                   SET mention_count = mention_count + ?,
+                       last_mentioned = datetime('now')
+                   WHERE person_id = ?""",
+                (count, person_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
     return get_known_person(person_id)
+
+
+# Mirrors the CHECK (emotional_tone IN (...)) on known_persons in
+# migrations/002_create_core.sql. Writing anything outside this set raises
+# IntegrityError, which (pre-fix) leaked a locked write transaction.
+_VALID_EMOTIONAL_TONES = {"positive", "neutral", "negative", "complex"}
 
 
 def set_emotional_tone(person_id: str, tone: str) -> dict | None:
     """Convenience wrapper around update_known_person for the nightly
-    interest consolidator. Allowed tones: positive, neutral, negative, complex,
-    warm, cold (free-form is permitted; see interest_policy.md)."""
+    interest consolidator. Only the four DB-allowed tones are accepted
+    (positive, neutral, negative, complex); any other value (e.g. a free-form
+    tone hallucinated by the LLM) is rejected with a warning and NOT written,
+    since the known_persons CHECK constraint would otherwise raise."""
+    if tone not in _VALID_EMOTIONAL_TONES:
+        logger.warning(
+            f"[social] set_emotional_tone rejected invalid tone {tone!r} "
+            f"for person_id={person_id} (allowed: {sorted(_VALID_EMOTIONAL_TONES)})"
+        )
+        return None
     return update_known_person(person_id, emotional_tone=tone)
 
 
@@ -327,21 +356,23 @@ def add_identifier(person_id: str, platform: str, identifier: str,
         raise ValueError(f"unknown platform: {platform!r}")
 
     conn = core.get_conn()
-    conn.execute(
-        """INSERT INTO person_identifiers
-           (person_id, platform, identifier, verified, notes)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(platform, identifier) DO UPDATE SET
-               last_seen = CURRENT_TIMESTAMP""",
-        (person_id, platform, identifier, 1 if verified else 0, notes),
-    )
-    conn.commit()
-    row = conn.execute(
-        """SELECT * FROM person_identifiers
-           WHERE platform = ? AND identifier = ?""",
-        (platform, identifier),
-    ).fetchone()
-    conn.close()
+    try:
+        conn.execute(
+            """INSERT INTO person_identifiers
+               (person_id, platform, identifier, verified, notes)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(platform, identifier) DO UPDATE SET
+                   last_seen = CURRENT_TIMESTAMP""",
+            (person_id, platform, identifier, 1 if verified else 0, notes),
+        )
+        conn.commit()
+        row = conn.execute(
+            """SELECT * FROM person_identifiers
+               WHERE platform = ? AND identifier = ?""",
+            (platform, identifier),
+        ).fetchone()
+    finally:
+        conn.close()
     return dict(row) if row else None
 
 
@@ -381,28 +412,32 @@ def get_identifiers_for_person(person_id: str) -> list[dict]:
 
 def verify_identifier(identifier_id: int) -> dict | None:
     conn = core.get_conn()
-    conn.execute(
-        "UPDATE person_identifiers SET verified = 1 WHERE identifier_id = ?",
-        (identifier_id,),
-    )
-    conn.commit()
-    row = conn.execute(
-        "SELECT * FROM person_identifiers WHERE identifier_id = ?",
-        (identifier_id,),
-    ).fetchone()
-    conn.close()
+    try:
+        conn.execute(
+            "UPDATE person_identifiers SET verified = 1 WHERE identifier_id = ?",
+            (identifier_id,),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM person_identifiers WHERE identifier_id = ?",
+            (identifier_id,),
+        ).fetchone()
+    finally:
+        conn.close()
     return dict(row) if row else None
 
 
 def remove_identifier(identifier_id: int) -> bool:
     conn = core.get_conn()
-    cur = conn.execute(
-        "DELETE FROM person_identifiers WHERE identifier_id = ?",
-        (identifier_id,),
-    )
-    conn.commit()
-    deleted = cur.rowcount > 0
-    conn.close()
+    try:
+        cur = conn.execute(
+            "DELETE FROM person_identifiers WHERE identifier_id = ?",
+            (identifier_id,),
+        )
+        conn.commit()
+        deleted = cur.rowcount > 0
+    finally:
+        conn.close()
     return deleted
 
 
@@ -463,11 +498,11 @@ def add_relation(from_person_id: str, to_person_id: str,
                  AND relation_label = ?""",
             (from_person_id, to_person_id, relation_label),
         ).fetchone()
-        conn.close()
         return dict(row) if row else None
     except sqlite3.IntegrityError:
-        conn.close()
         return None
+    finally:
+        conn.close()
 
 
 def get_relations(person_id: str, include_stale: bool = False) -> list[dict]:
@@ -555,22 +590,26 @@ def find_related_persons(
 
 def delete_relation(relation_id: int):
     conn = core.get_conn()
-    conn.execute("DELETE FROM relations WHERE relation_id = ?", (relation_id,))
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute("DELETE FROM relations WHERE relation_id = ?", (relation_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def increment_relation_mention(from_person_id: str, to_person_id: str):
     conn = core.get_conn()
-    conn.execute(
-        """UPDATE relations
-           SET mention_count = mention_count + 1,
-               last_mentioned = datetime('now')
-           WHERE from_person_id = ? AND to_person_id = ?""",
-        (from_person_id, to_person_id),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """UPDATE relations
+               SET mention_count = mention_count + 1,
+                   last_mentioned = datetime('now')
+               WHERE from_person_id = ? AND to_person_id = ?""",
+            (from_person_id, to_person_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -872,26 +911,27 @@ def resolve_person_mention(
 def _recalc_status(person_id: str, score: float):
     """Update status based on interest_score thresholds."""
     conn = core.get_conn()
-    row = conn.execute(
-        "SELECT status FROM known_persons WHERE person_id = ?", (person_id,)
-    ).fetchone()
-    if not row or row["status"] == "forgotten":
-        conn.close()
-        return
+    try:
+        row = conn.execute(
+            "SELECT status FROM known_persons WHERE person_id = ?", (person_id,)
+        ).fetchone()
+        if not row or row["status"] == "forgotten":
+            return
 
-    current = row["status"]
-    if score < 0 and current != "disliked":
-        conn.execute(
-            "UPDATE known_persons SET status = 'disliked' WHERE person_id = ?",
-            (person_id,),
-        )
-    elif score >= 0 and current == "disliked":
-        conn.execute(
-            "UPDATE known_persons SET status = 'active' WHERE person_id = ?",
-            (person_id,),
-        )
-    conn.commit()
-    conn.close()
+        current = row["status"]
+        if score < 0 and current != "disliked":
+            conn.execute(
+                "UPDATE known_persons SET status = 'disliked' WHERE person_id = ?",
+                (person_id,),
+            )
+        elif score >= 0 and current == "disliked":
+            conn.execute(
+                "UPDATE known_persons SET status = 'active' WHERE person_id = ?",
+                (person_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def add_delta(person_id: str, delta: float,
@@ -920,15 +960,17 @@ def add_delta(person_id: str, delta: float,
         return person
 
     conn = core.get_conn()
-    conn.execute(
-        """UPDATE known_persons
-           SET interest_score = ?,
-               last_mentioned = datetime('now')
-           WHERE person_id = ?""",
-        (new_score, person_id),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """UPDATE known_persons
+               SET interest_score = ?,
+                   last_mentioned = datetime('now')
+               WHERE person_id = ?""",
+            (new_score, person_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
     _recalc_status(person_id, new_score)
     return get_known_person(person_id)
@@ -944,31 +986,33 @@ def run_decay():
     28+ days since last_mentioned → reduce toward 0.10 or mark as decaying."""
     threshold = (datetime.now(UTC) - timedelta(days=28)).isoformat()
     conn = core.get_conn()
-    rows = conn.execute(
-        """SELECT person_id, interest_score, status
-           FROM known_persons
-           WHERE person_id != 'jose'
-             AND status IN ('active', 'decaying')
-             AND interest_score >= 0
-             AND last_mentioned < ?""",
-        (threshold,),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            """SELECT person_id, interest_score, status
+               FROM known_persons
+               WHERE person_id != 'jose'
+                 AND status IN ('active', 'decaying')
+                 AND interest_score >= 0
+                 AND last_mentioned < ?""",
+            (threshold,),
+        ).fetchall()
 
-    for r in rows:
-        person_id = r["person_id"]
-        current = r["interest_score"]
-        new_score = max(current - 0.02, 0.10)
-        new_status = "decaying" if new_score <= 0.15 else r["status"]
+        for r in rows:
+            person_id = r["person_id"]
+            current = r["interest_score"]
+            new_score = max(current - 0.02, 0.10)
+            new_status = "decaying" if new_score <= 0.15 else r["status"]
 
-        conn.execute(
-            """UPDATE known_persons
-               SET interest_score = ?, status = ?
-               WHERE person_id = ?""",
-            (new_score, new_status, person_id),
-        )
+            conn.execute(
+                """UPDATE known_persons
+                   SET interest_score = ?, status = ?
+                   WHERE person_id = ?""",
+                (new_score, new_status, person_id),
+            )
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
