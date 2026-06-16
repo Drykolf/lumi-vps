@@ -433,54 +433,22 @@ async def consolidate_entity_mentions() -> dict:
 
     pending_by_id = {m["mention_id"]: m for m in pending}
 
-    # Pass 1: create_new
+    # Pass 1: create_new — DISABLED.
+    # Auto-creating known_persons from mentions produced too many inconsistent /
+    # duplicate entities. Until the resolution heuristics are tightened, any
+    # `create_new` decision is parked as `needs_review` instead of being inserted
+    # into the database. No new persons are added by the nightly pipeline.
+    # To re-enable, restore the ensure_known_person/bump_mention block from git.
     slug_remap: dict[str, str] = {}
     for d in decisions:
         if d.get("action") != "create_new":
             continue
         mid = d.get("mention_id")
-        new_person = d.get("new_person") or {}
-        proposed_raw = new_person.get("person_id") or _slug_for_person(
-            new_person.get("canonical_name") or new_person.get("display_name") or ""
+        mentions_mod.update_consolidation_status(mid, "needs_review")
+        metrics["needs_review"] += 1
+        logger.info(
+            f"[entity_consolidation] create_new disabled → needs_review mention_id={mid}"
         )
-        proposed = _slug_for_person(proposed_raw)
-        if not proposed:
-            logger.warning(f"[entity_consolidation] create_new without valid slug: mention_id={mid}")
-            mentions_mod.update_consolidation_status(mid, "needs_review")
-            metrics["needs_review"] += 1
-            continue
-        final_pid = _ensure_unique_person_id(proposed)
-        slug_remap[proposed_raw] = final_pid
-        slug_remap[proposed] = final_pid
-        try:
-            social.ensure_known_person(
-                final_pid,
-                display_name=new_person.get("display_name") or final_pid,
-                canonical_name=new_person.get("canonical_name") or new_person.get("display_name") or final_pid,
-                aliases=new_person.get("aliases") or [],
-            )
-            row = pending_by_id.get(mid)
-            mentions_mod.update_mention_resolution(
-                mention_id=mid,
-                status="resolved",
-                resolved_person_id=final_pid,
-            )
-            mentions_mod.mark_consolidated(mid)
-            social.bump_mention(
-                final_pid,
-                count=1,
-                last_seen_ts=row.get("created_at") if row else None,
-            )
-            metrics["created_new"] += 1
-            metrics["affected_person_ids"].add(final_pid)
-            logger.info(
-                f"[entity_consolidation] create_new mention_id={mid} → person_id={final_pid} "
-                f"(proposed={proposed_raw!r})"
-            )
-        except Exception as e:
-            logger.warning(f"[entity_consolidation] create_new failed for mention_id={mid}: {e}")
-            mentions_mod.update_consolidation_status(mid, "needs_review")
-            metrics["needs_review"] += 1
 
     # Pass 2: resolved + delete
     for d in decisions:
