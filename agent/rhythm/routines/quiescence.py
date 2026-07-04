@@ -6,7 +6,7 @@ Execution order (each step depends on the previous one having a stable view):
                                       persons, delete anonymous ones
   2. consolidate_person_interest   — LLM-evaluated per-person deltas
   3. update_profiles               — aliases / name / emotional_tone refinement (identity-only)
-  4. update_relations              — new relations + infer_family_relations
+  4. update_relations              — DISABLED (spurious relations; see Step 4)
   5. consolidate_daily_memories    — extract atomic facts → Mem0 (subject-centric Modelo C)
   6. extract_daily_learnings       — diary entries (already wired)
   7. analyze_daily_tasks           — skill_proposals (stub)
@@ -119,17 +119,20 @@ async def nightly_quiescence() -> None:
             )
 
             # ── Step 4 — relations ────────────────────────────────────────
-            await _run_step(
-                log,
-                "update_relations",
-                update_relations,
-                expected_keys=[
-                    "persons_evaluated",
-                    "relations_added",
-                    "relations_inferred",
-                    "skipped",
-                ],
-            )
+            # DISABLED: relation inference produced too many spurious/incorrect
+            # relations. The nightly no longer evaluates or writes to `relations`.
+            # To re-enable, uncomment the _run_step call below.
+            # await _run_step(
+            #     log,
+            #     "update_relations",
+            #     update_relations,
+            #     expected_keys=[
+            #         "persons_evaluated",
+            #         "relations_added",
+            #         "relations_inferred",
+            #         "skipped",
+            #     ],
+            # )
 
             # ── Step 5 — daily memories ───────────────────────────────────
             await _run_step(
